@@ -1,0 +1,42 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Local Claude configuration
+.claude/settings.local.json
+
+# Local Arduino CLI state and downloaded packages
+.arduino-data/
+.arduino-downloads/
+.arduino-home/
+.arduino-user/
+
+# Local tools and runtime state
+.tools/
+.runtime/
+
+# Arduino and embedded build outputs
+build/
+*.elf
+*.hex
+*.bin
+*.map
+*.eep
+*.lst
+*.o
+*.a
+*.d
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+*~
