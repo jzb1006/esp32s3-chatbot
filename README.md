@@ -36,6 +36,128 @@ ESP32-S3 开发板的 WiFi 固件集合，核心是一个可用的 **WiFi 配网
 5. 异步连接，网页轮询显示「连接中 / 成功 / 失败」
 6. 连接成功 → 密码存进 NVS（掉电不丢）→ 关热点切 STA 正常工作
 7. 串口每 5 秒打印一次 `[STA] connected=1 ip=... rssi=...`
+8. 已联网后可通过串口命令访问 Python LLM 管理后台：
+   - `admin http://<后台地址>:8766`：保存后台地址（线上后台见下方「最小 LLM 管理后台」）
+   - `token <设备Token>`：保存设备 token（后台开启设备鉴权时用；留空清除）
+   - `ask <问题>`：请求后台 `/api/chat` 并打印回答（自动携带已保存的 `X-Device-Token`）
+
+> API Key 不写入 ESP32 固件；由 Python 后台保存并代理调用大模型。
+
+---
+
+## 最小 LLM 管理后台
+
+当前最小版使用 Python 标准库实现，无需 FastAPI 等额外依赖：
+
+- 管理页面：配置大模型 URL、模型名、API Key、全局提示词、用户信息记忆
+- JSON 接口：`POST /api/chat`、`POST /api/conversations/new`（设备端）；`GET/POST /admin/<随机串>/api/config`（管理端）
+- 默认 DeepSeek OpenAI 兼容地址：`https://api.deepseek.com`
+- 默认模型名：`deepseek-chat`
+
+> **后台已部署到云服务器（Docker）：`http://203.195.202.54:8766`。**
+> 部署架构、运维命令、安全说明、凭据重置见 [`docs/deployment.md`](docs/deployment.md)。
+
+### 1. 运行后台
+
+**线上（已部署）：** 腾讯云 Docker 容器常驻，访问 `http://203.195.202.54:8766`，无需手动启动；更新 / 运维见 [`docs/deployment.md`](docs/deployment.md)。
+
+**本地开发：**
+
+```bash
+cd /Users/jiangzhibin/Documents/ardiuno
+python3 -m llm_admin.server --host 0.0.0.0 --port 8766
+```
+
+### 管理页登录（安全加固）
+
+管理页采用**随机路径 + 账号密码登录（HTTP Basic Auth）**：
+
+```text
+http://<后台地址>:8766/admin/<admin_path_secret>
+```
+
+- 直接访问 `/admin` 或猜错随机串 → `404`（不暴露后台位置）
+- 打开正确地址后浏览器弹账号密码框，输入 `admin_user` / `admin_password` 才能进
+- 随机串、账号、密码在部署时随机生成，存于服务器 `data/llm_config.json`（忘记可按 [`docs/deployment.md`](docs/deployment.md) §6.5 重置）
+
+### 2. 在后台配置
+
+登录管理页后填写：
+
+- 大模型 URL：`https://api.deepseek.com`
+- 模型名：`deepseek-chat`
+- API Key：你的 DeepSeek API Key
+- 管理账号 / 管理密码：登录管理页的账号密码（Basic Auth）
+- 管理路径随机串：管理页地址 `/admin/<随机串>` 的随机段（改后用新地址登录）
+- 设备 Token：保护 `/api/chat`（留空则设备免鉴权）
+- 最大 prompt 字符数：例如 `2000`
+- 历史轮数：例如 `8`
+- 全局提示词：例如 `你是运行在 ESP32-S3 设备后的简洁助手。`
+- 用户信息记忆：例如 `用户希望回答简短，优先中文。`
+
+配置会保存到：
+
+```text
+data/llm_config.json
+```
+
+> 该文件包含 API Key 与管理密码，已通过 `.gitignore` 忽略，不要提交。
+
+### 3. ESP32-S3 串口使用
+
+打开串口：
+
+```bash
+arduino-cli monitor -p /dev/cu.usbmodem101 -c baudrate=115200
+```
+
+输入命令：
+
+```text
+help
+admin http://<后台地址>:8766
+token <设备Token>
+ask 你好，用一句话介绍你自己
+```
+
+设备会向 Python 后台发送：
+
+```text
+POST /api/chat
+```
+
+后台再调用 DeepSeek，最后设备在串口打印 `LLM answer:`。
+
+### 4. 设备模拟器
+
+硬件音频模块接入前，可以先用 Python 模拟 ESP32 连续聊天：
+
+```bash
+python3 -m llm_admin.device_simulator \
+  --server http://127.0.0.1:8766 \
+  --device-id esp32-dev-001 \
+  --token "你的设备 Token"
+```
+
+模拟器命令：
+
+```text
+/new   # 创建新会话
+/exit  # 退出
+```
+
+普通输入会发送到 `/api/chat`，后台返回并维护 `conversation_id`。
+
+### 5. 会话与安全模型
+
+- `device_id`：识别设备
+- `conversation_id`：识别一次连续对话
+- 同一 `device_id + conversation_id` 会拼接最近 N 轮历史
+- 新会话通过 `/api/conversations/new` 创建
+- 管理端：随机路径 `/admin/<随机串>` + 账号密码登录（HTTP Basic Auth）
+- 设备端：`/api/chat` 用 `X-Device-Token` 鉴权（设备 Token 为空时免鉴权）
+- API Key、管理密码、路径随机串、设备 Token 不会从配置接口返回
+- 语音接口已预留：`POST /api/voice/chat`，当前返回 `voice_not_ready`
 
 ### `esp32s3_wifi_self_test/` — 纯 WiFi 扫描自检
 

@@ -1,4 +1,5 @@
 #include <WiFi.h>
+#include <HTTPClient.h>
 #include <DNSServer.h>
 #include <WebServer.h>
 #include <Preferences.h>
@@ -26,6 +27,8 @@ const unsigned long STA_CONNECT_TIMEOUT_MS = 15000;
 const unsigned long AP_LINGER_AFTER_SUCCESS_MS = 8000;  // keep AP up so the
                                                         // success page loads
 const char *PREFS_NAMESPACE = "wifi";
+const char *DEFAULT_ADMIN_URL = "http://192.168.3.100:8766";
+const unsigned long ADMIN_CHAT_TIMEOUT_MS = 65000;
 
 // ---------- state ----------
 enum PortalState { PS_IDLE, PS_CONNECTING, PS_SUCCESS, PS_FAILED };
@@ -41,6 +44,7 @@ String pendingSsid, pendingPass;
 bool connectRequested = false;
 unsigned long connectStartAt = 0;
 unsigned long switchToStaAt = 0;  // 0 = no pending switch to STA-only
+String serialLine;
 
 // ---------- credentials (NVS) ----------
 bool loadCredentials(String &ssid, String &pass) {
@@ -56,6 +60,216 @@ void saveCredentials(const String &ssid, const String &pass) {
   prefs.putString("ssid", ssid);
   prefs.putString("pass", pass);
   prefs.end();
+}
+
+String loadAdminUrl() {
+  prefs.begin(PREFS_NAMESPACE, true);
+  String url = prefs.getString("admin_url", DEFAULT_ADMIN_URL);
+  prefs.end();
+  return url;
+}
+
+void saveAdminUrl(const String &url) {
+  prefs.begin(PREFS_NAMESPACE, false);
+  prefs.putString("admin_url", url);
+  prefs.end();
+}
+
+String loadDeviceToken() {
+  prefs.begin(PREFS_NAMESPACE, true);
+  String token = prefs.getString("device_token", "");
+  prefs.end();
+  return token;
+}
+
+void saveDeviceToken(const String &token) {
+  prefs.begin(PREFS_NAMESPACE, false);
+  prefs.putString("device_token", token);
+  prefs.end();
+}
+
+// ---------- LLM admin backend ----------
+String jsonEscape(const String &value) {
+  String out;
+  out.reserve(value.length() + 8);
+  for (size_t i = 0; i < value.length(); i++) {
+    char c = value.charAt(i);
+    if (c == '\\' || c == '"') {
+      out += '\\';
+      out += c;
+    } else if (c == '\n') {
+      out += "\\n";
+    } else if (c == '\r') {
+      out += "\\r";
+    } else if (c == '\t') {
+      out += "\\t";
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+String jsonUnescape(const String &value) {
+  String out;
+  out.reserve(value.length());
+  bool escaping = false;
+  for (size_t i = 0; i < value.length(); i++) {
+    char c = value.charAt(i);
+    if (escaping) {
+      if (c == 'n') {
+        out += '\n';
+      } else if (c == 'r') {
+        out += '\r';
+      } else if (c == 't') {
+        out += '\t';
+      } else {
+        out += c;
+      }
+      escaping = false;
+    } else if (c == '\\') {
+      escaping = true;
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+String extractJsonString(const String &json, const String &key) {
+  String marker = "\"" + key + "\":";
+  int keyPos = json.indexOf(marker);
+  if (keyPos < 0) {
+    return "";
+  }
+  int valueStart = json.indexOf('"', keyPos + marker.length());
+  if (valueStart < 0) {
+    return "";
+  }
+  String raw;
+  bool escaping = false;
+  for (int i = valueStart + 1; i < json.length(); i++) {
+    char c = json.charAt(i);
+    if (escaping) {
+      raw += '\\';
+      raw += c;
+      escaping = false;
+    } else if (c == '\\') {
+      escaping = true;
+    } else if (c == '"') {
+      return jsonUnescape(raw);
+    } else {
+      raw += c;
+    }
+  }
+  return "";
+}
+
+void printCommandHelp() {
+  Serial.println("Commands:");
+  Serial.println("  help");
+  Serial.println("  admin <http://host:8766>");
+  Serial.println("  token <device-token>   (empty to clear)");
+  Serial.println("  ask <prompt>");
+  Serial.printf("Current admin URL: %s\n", loadAdminUrl().c_str());
+  Serial.printf("Device token: %s\n", loadDeviceToken().length() > 0 ? "set" : "unset");
+}
+
+void askAdminBackend(const String &prompt) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi is not connected; cannot call admin backend.");
+    return;
+  }
+
+  String adminUrl = loadAdminUrl();
+  if (adminUrl.endsWith("/")) {
+    adminUrl.remove(adminUrl.length() - 1);
+  }
+
+  HTTPClient http;
+  http.setTimeout(ADMIN_CHAT_TIMEOUT_MS);
+  String endpoint = adminUrl + "/api/chat";
+  Serial.printf("POST %s\n", endpoint.c_str());
+  if (!http.begin(endpoint)) {
+    Serial.println("HTTP begin failed.");
+    return;
+  }
+  http.addHeader("Content-Type", "application/json");
+  String deviceToken = loadDeviceToken();
+  if (deviceToken.length() > 0) {
+    http.addHeader("X-Device-Token", deviceToken);
+  }
+
+  String body = "{\"prompt\":\"" + jsonEscape(prompt) + "\"}";
+  int code = http.POST(body);
+  String response = http.getString();
+  http.end();
+
+  if (code != 200) {
+    Serial.printf("LLM backend failed: HTTP %d\n", code);
+    Serial.println(response);
+    return;
+  }
+
+  String answer = extractJsonString(response, "answer");
+  if (answer.length() == 0) {
+    Serial.println("LLM backend response missing answer:");
+    Serial.println(response);
+    return;
+  }
+
+  Serial.println("LLM answer:");
+  Serial.println(answer);
+}
+
+void handleSerialLine(String line) {
+  line.trim();
+  if (line.length() == 0) {
+    return;
+  }
+  if (line == "help") {
+    printCommandHelp();
+  } else if (line.startsWith("admin ")) {
+    String url = line.substring(6);
+    url.trim();
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+      Serial.println("Admin URL must start with http:// or https://");
+      return;
+    }
+    saveAdminUrl(url);
+    Serial.printf("Admin URL saved: %s\n", url.c_str());
+  } else if (line.startsWith("token ")) {
+    String token = line.substring(6);
+    token.trim();
+    saveDeviceToken(token);
+    Serial.println(token.length() > 0 ? "Device token saved." : "Device token cleared.");
+  } else if (line.startsWith("ask ")) {
+    String prompt = line.substring(4);
+    prompt.trim();
+    if (prompt.length() == 0) {
+      Serial.println("Prompt is empty.");
+      return;
+    }
+    askAdminBackend(prompt);
+  } else {
+    Serial.println("Unknown command. Type help.");
+  }
+}
+
+void processSerialCommands() {
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == '\n') {
+      handleSerialLine(serialLine);
+      serialLine = "";
+    } else if (c != '\r') {
+      serialLine += c;
+      if (serialLine.length() > 512) {
+        serialLine = "";
+        Serial.println("Serial command too long; cleared.");
+      }
+    }
+  }
 }
 
 // ---------- STA connect (blocking, used only at boot) ----------
@@ -248,6 +462,7 @@ void setup() {
   delay(500);
   Serial.println();
   Serial.println("=== ESP32-S3 WiFi provisioning ===");
+  printCommandHelp();
 
   String ssid, pass;
   if (loadCredentials(ssid, pass)) {
@@ -256,6 +471,7 @@ void setup() {
     WiFi.mode(WIFI_STA);
     if (connectStaBlocking(ssid, pass)) {
       Serial.printf("Connected. IP=%s\n", WiFi.localIP().toString().c_str());
+      Serial.println("Type 'ask <prompt>' to call the LLM admin backend.");
       return;  // stay in STA / normal operation
     }
     Serial.println("Saved credentials failed; starting provisioning portal.");
@@ -266,6 +482,8 @@ void setup() {
 }
 
 void loop() {
+  processSerialCommands();
+
   if (provisioning) {
     dnsServer.processNextRequest();
     server.handleClient();

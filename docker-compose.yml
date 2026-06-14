@@ -1,0 +1,11 @@
+services:
+  llm_admin:
+    build: .
+    image: llm_admin:latest
+    container_name: llm_admin
+    restart: unless-stopped
+    ports:
+      - "8766:8766"
+    volumes:
+      # 配置与会话数据持久化到宿主机，容器重建不丢
+      - ./data:/app/data

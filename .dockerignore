@@ -1,0 +1,19 @@
+# 只把 llm_admin 包打进镜像，其余一律排除
+**/__pycache__/
+*.py[cod]
+data/
+.venv/
+venv/
+tests/
+build/
+docs/
+esp32s3_*/
+.arduino-data/
+.arduino-downloads/
+.arduino-home/
+.arduino-user/
+.tools/
+.git/
+.idea/
+.claude/
+*.md
