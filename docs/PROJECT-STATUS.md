@@ -33,13 +33,13 @@
 
 ## 二、未完成 / 后期继续 ⏳
 
-### A. 安全收尾（短期，建议优先）
-- [ ] **DeepSeek key 轮换** —— 部署时在对话里暴露过，控制台换新；换完更新服务器 `~/.hermes/.env`(`DEEPSEEK_API_KEY`) + `/opt/device_gateway/data/llm_config.json`(`api_key`)。
-- [ ] **device_token** —— `8766` 公网当前无设备鉴权（terminal 已禁、风险已大降但非零）；配了需固件烧录对应 token，要协调。
+### A. 安全收尾（短期）
+- [x] **device_token 已启用** —— 线上 `/api/chat`、`/api/conversations/new`、`/api/voice/chat` 已要求 `X-Device-Token`；本地 token 存在 `data/device_token.txt`（已被 `.gitignore` 忽略，权限 `0600`）。后续真实 ESP32 需要通过串口执行 `token <设备Token>` 写入 NVS，或在重新烧录后设置。
 - [ ] **HTTPS** —— HTTP 明文，建议域名 + Let's Encrypt 或 nginx/caddy 反代。
+- [ ] **DeepSeek key 轮换（后置）** —— 当前先不处理；后续需要在 DeepSeek 控制台换新，再更新服务器 `~/.hermes/.env`（`DEEPSEEK_API_KEY`）和 `/opt/device_gateway/data/llm_config.json`（`api_key`）。
 
 ### B. 代码提交
-- [ ] **本地改动未 git commit**（瘦身 + 改名 + 文档 + ADR + spike + compose 加网络）。改名是 `mv` 做的，commit 前 `git add -A` 让 git 识别 rename。
+- [x] **Hermes 接入与 `device_gateway` 改名已提交并推送** —— 当前 `main` 与 `origin/main` 对齐，最新提交为 `705dd24 feat: 中间件接入 Hermes Agent 并瘦身为设备网关 device_gateway`。
 
 ### C. 语音链路（中长期 · `design` §14 roadmap）
 当前处于**阶段一（文本对话 + Hermes 记忆）= 已完成**。语音 6 层里只做了第 4 层（云端 LLM 大脑）。

@@ -36,8 +36,8 @@ ESP32-S3 开发板的 WiFi 固件集合，核心是一个可用的 **WiFi 配网
 5. 异步连接，网页轮询显示「连接中 / 成功 / 失败」
 6. 连接成功 → 密码存进 NVS（掉电不丢）→ 关热点切 STA 正常工作
 7. 串口每 5 秒打印一次 `[STA] connected=1 ip=... rssi=...`
-8. 已联网后可通过串口命令访问 Python LLM 管理后台：
-   - `admin http://<后台地址>:8766`：保存后台地址（线上后台见下方「最小 LLM 管理后台」）
+8. 已联网后可通过串口命令访问 Python 设备网关：
+   - `admin http://<后台地址>:8766`：保存后台地址（线上后台见下方「设备网关」）
    - `token <设备Token>`：保存设备 token（后台开启设备鉴权时用；留空清除）
    - `ask <问题>`：请求后台 `/api/chat` 并打印回答（自动携带已保存的 `X-Device-Token`）
 
@@ -45,14 +45,17 @@ ESP32-S3 开发板的 WiFi 固件集合，核心是一个可用的 **WiFi 配网
 
 ---
 
-## 最小 LLM 管理后台
+## 设备网关（Hermes Agent）
 
-当前最小版使用 Python 标准库实现，无需 FastAPI 等额外依赖：
+当前最小版使用 Python 标准库实现，无需 FastAPI 等额外依赖。后台已经从直连大模型的 LLM 管理后台瘦身为 **ESP32-S3 → Hermes Agent** 的设备网关：
 
-- 管理页面：配置大模型 URL、模型名、API Key、全局提示词、用户信息记忆
+- 管理页面：配置 Hermes URL、Hermes API Key、会话记忆 Key、管理凭据和设备 Token
 - JSON 接口：`POST /api/chat`、`POST /api/conversations/new`（设备端）；`GET/POST /admin/<随机串>/api/config`（管理端）
-- 默认 DeepSeek OpenAI 兼容地址：`https://api.deepseek.com`
-- 默认模型名：`deepseek-chat`
+- 默认 Hermes 地址：`http://hermes:8642/v1`
+- 默认模型名：`hermes-agent`
+
+模型、人格、长期记忆和工具能力在 Hermes 端配置；设备网关只负责设备鉴权、prompt 限长、
+`conversation_id` 生成 / 透传和响应提取。
 
 > **后台已部署到云服务器（Docker）：`http://203.195.202.54:8766`。**
 > 部署架构、运维命令、安全说明、凭据重置见 [`docs/deployment.md`](docs/deployment.md)。
@@ -84,16 +87,15 @@ http://<后台地址>:8766/admin/<admin_path_secret>
 
 登录管理页后填写：
 
-- 大模型 URL：`https://api.deepseek.com`
-- 模型名：`deepseek-chat`
-- API Key：你的 DeepSeek API Key
+- 大模型 URL：Hermes API 地址，例如 `http://hermes:8642/v1`
+- 模型名：通常填 `hermes-agent`（实际模型路由由 Hermes 决定）
+- API Key：Hermes 的 `API_SERVER_KEY`
+- 记忆 Key：长期记忆 scope，单用户可填 `owner`
+- 请求超时：例如 `120`
 - 管理账号 / 管理密码：登录管理页的账号密码（Basic Auth）
 - 管理路径随机串：管理页地址 `/admin/<随机串>` 的随机段（改后用新地址登录）
 - 设备 Token：保护 `/api/chat`（留空则设备免鉴权）
 - 最大 prompt 字符数：例如 `2000`
-- 历史轮数：例如 `8`
-- 全局提示词：例如 `你是运行在 ESP32-S3 设备后的简洁助手。`
-- 用户信息记忆：例如 `用户希望回答简短，优先中文。`
 
 配置会保存到：
 
@@ -126,7 +128,7 @@ ask 你好，用一句话介绍你自己
 POST /api/chat
 ```
 
-后台再调用 DeepSeek，最后设备在串口打印 `LLM answer:`。
+后台再转发到 Hermes Agent，最后设备在串口打印 `LLM answer:`。
 
 ### 4. 设备模拟器
 
@@ -146,13 +148,13 @@ python3 -m device_gateway.device_simulator \
 /exit  # 退出
 ```
 
-普通输入会发送到 `/api/chat`，后台返回并维护 `conversation_id`。
+普通输入会发送到 `/api/chat`。网关会把 `conversation_id` 透传给 Hermes，由 Hermes 维护短期多轮上下文。
 
 ### 5. 会话与安全模型
 
 - `device_id`：识别设备
 - `conversation_id`：识别一次连续对话
-- 同一 `device_id + conversation_id` 会拼接最近 N 轮历史
+- 同一 `conversation_id` 会透传为 Hermes 命名会话；网关不在本地保存对话历史
 - 新会话通过 `/api/conversations/new` 创建
 - 管理端：随机路径 `/admin/<随机串>` + 账号密码登录（HTTP Basic Auth）
 - 设备端：`/api/chat` 用 `X-Device-Token` 鉴权（设备 Token 为空时免鉴权）
