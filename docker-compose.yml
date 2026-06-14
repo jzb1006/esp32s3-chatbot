@@ -1,11 +1,17 @@
 services:
-  llm_admin:
+  device_gateway:
     build: .
-    image: llm_admin:latest
-    container_name: llm_admin
+    image: device_gateway:latest
+    container_name: device_gateway
     restart: unless-stopped
     ports:
       - "8766:8766"
     volumes:
-      # 配置与会话数据持久化到宿主机，容器重建不丢
+      # 配置持久化到宿主机（含管理凭据），容器重建不丢
       - ./data:/app/data
+    networks:
+      # 与 hermes 同网络，用 http://hermes:8642/v1 互访（hermes 不暴露公网）
+      - hermes-net
+networks:
+  hermes-net:
+    external: true

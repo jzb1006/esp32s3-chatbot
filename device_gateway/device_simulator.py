@@ -59,7 +59,7 @@ class DeviceClient:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ESP32-S3 LLM device simulator")
+    parser = argparse.ArgumentParser(description="ESP32-S3 device simulator")
     parser.add_argument("--server", required=True)
     parser.add_argument("--device-id", required=True)
     parser.add_argument("--token", default="")

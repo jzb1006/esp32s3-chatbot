@@ -65,7 +65,7 @@ ESP32-S3 开发板的 WiFi 固件集合，核心是一个可用的 **WiFi 配网
 
 ```bash
 cd /Users/jiangzhibin/Documents/ardiuno
-python3 -m llm_admin.server --host 0.0.0.0 --port 8766
+python3 -m device_gateway.server --host 0.0.0.0 --port 8766
 ```
 
 ### 管理页登录（安全加固）
@@ -133,7 +133,7 @@ POST /api/chat
 硬件音频模块接入前，可以先用 Python 模拟 ESP32 连续聊天：
 
 ```bash
-python3 -m llm_admin.device_simulator \
+python3 -m device_gateway.device_simulator \
   --server http://127.0.0.1:8766 \
   --device-id esp32-dev-001 \
   --token "你的设备 Token"

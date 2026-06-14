@@ -63,8 +63,8 @@
 
 修改：
 
-- `llm_admin/app_core.py`
-- `tests/test_llm_admin_core.py`
+- `device_gateway/app_core.py`
+- `tests/test_device_gateway_core.py`
 
 在配置中增加：
 
@@ -83,15 +83,15 @@
 验收：
 
 ```bash
-python3 -m unittest /Users/jiangzhibin/Documents/ardiuno/tests/test_llm_admin_core.py
+python3 -m unittest /Users/jiangzhibin/Documents/ardiuno/tests/test_device_gateway_core.py
 ```
 
 ### 2. 鉴权层
 
 修改：
 
-- `llm_admin/server.py`
-- `tests/test_llm_admin_http.py`
+- `device_gateway/server.py`
+- `tests/test_device_gateway_http.py`
 
 行为：
 
@@ -107,14 +107,14 @@ python3 -m unittest /Users/jiangzhibin/Documents/ardiuno/tests/test_llm_admin_co
 验收：
 
 ```bash
-python3 -m unittest /Users/jiangzhibin/Documents/ardiuno/tests/test_llm_admin_http.py
+python3 -m unittest /Users/jiangzhibin/Documents/ardiuno/tests/test_device_gateway_http.py
 ```
 
 ### 3. 会话存储
 
 新增：
 
-- `llm_admin/conversation.py`
+- `device_gateway/conversation.py`
 - `tests/test_conversation_store.py`
 
 数据文件：
@@ -156,10 +156,10 @@ python3 -m unittest /Users/jiangzhibin/Documents/ardiuno/tests/test_conversation
 
 修改：
 
-- `llm_admin/app_core.py`
-- `llm_admin/server.py`
-- `tests/test_llm_admin_core.py`
-- `tests/test_llm_admin_http.py`
+- `device_gateway/app_core.py`
+- `device_gateway/server.py`
+- `tests/test_device_gateway_core.py`
+- `tests/test_device_gateway_http.py`
 
 请求从：
 
@@ -203,15 +203,15 @@ python3 -m unittest /Users/jiangzhibin/Documents/ardiuno/tests/test_conversation
 验收：
 
 ```bash
-python3 -m unittest discover -s /Users/jiangzhibin/Documents/ardiuno/tests -p "test_llm_admin*.py"
+python3 -m unittest discover -s /Users/jiangzhibin/Documents/ardiuno/tests -p "test_device_gateway*.py"
 ```
 
 ### 5. 新会话接口
 
 修改：
 
-- `llm_admin/server.py`
-- `tests/test_llm_admin_http.py`
+- `device_gateway/server.py`
+- `tests/test_device_gateway_http.py`
 
 新增：
 
@@ -246,13 +246,13 @@ POST /api/conversations/new
 
 新增：
 
-- `llm_admin/device_simulator.py`
+- `device_gateway/device_simulator.py`
 - `tests/test_device_simulator.py`
 
 命令：
 
 ```bash
-python3 -m llm_admin.device_simulator \
+python3 -m device_gateway.device_simulator \
   --server http://127.0.0.1:8766 \
   --device-id esp32-dev-001 \
   --token xxx
@@ -274,8 +274,8 @@ python3 -m llm_admin.device_simulator \
 
 修改：
 
-- `llm_admin/server.py`
-- `tests/test_llm_admin_http.py`
+- `device_gateway/server.py`
+- `tests/test_device_gateway_http.py`
 
 新增：
 
@@ -304,7 +304,7 @@ POST /api/voice/chat
 
 修改：
 
-- `llm_admin/server.py`
+- `device_gateway/server.py`
 
 页面增加：
 

@@ -3,18 +3,15 @@ import base64
 import hmac
 import html
 import json
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict
 
-from llm_admin import app_core
-from llm_admin.conversation import ConversationStore
+from device_gateway import app_core
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "data" / "llm_config.json"
-DEFAULT_CONVERSATIONS_PATH = (
-    Path(__file__).resolve().parents[1] / "data" / "conversations.json"
-)
 
 
 def read_json(handler: BaseHTTPRequestHandler) -> Dict[str, Any]:
@@ -69,7 +66,6 @@ def admin_base_path(config: Dict[str, Any]) -> str:
 def make_handler(
     store: app_core.ConfigStore,
     chat_service: app_core.ChatService,
-    conversation_store: ConversationStore,
 ):
     class LlmAdminHandler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -106,7 +102,7 @@ def make_handler(
                 device_id = str(values.get("device_id", "default-device")).strip()
                 if not device_id:
                     device_id = "default-device"
-                conversation_id = conversation_store.new_conversation(device_id)
+                conversation_id = uuid.uuid4().hex
                 self.send_json(
                     200,
                     {
@@ -137,15 +133,16 @@ def make_handler(
                     device_id = "default-device"
                 conversation_id = str(values.get("conversation_id", "")).strip()
                 if not conversation_id:
-                    conversation_id = conversation_store.new_conversation(device_id)
-                history_limit = int(config["history_limit"])
-                history = conversation_store.history(device_id, conversation_id, history_limit)
+                    conversation_id = uuid.uuid4().hex
+                # Thin gateway: forward to Hermes; Hermes owns conversation state via
+                # the named conversation (= conversation_id). No local history/mirror.
                 try:
-                    answer = chat_service.chat(config, prompt, history)
+                    answer = chat_service.chat(
+                        config, prompt, conversation_id=conversation_id
+                    )
                 except Exception as exc:
                     self.send_json(500, {"error": str(exc)})
                     return
-                conversation_store.append_turn(device_id, conversation_id, prompt, answer)
                 self.send_json(
                     200,
                     {
@@ -180,7 +177,7 @@ def make_handler(
             # 401 + WWW-Authenticate makes the browser pop the username/password dialog.
             payload = json.dumps({"error": "authentication required"}).encode("utf-8")
             self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Basic realm="LLM Admin"')
+            self.send_header("WWW-Authenticate", 'Basic realm="Device Gateway"')
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
@@ -222,7 +219,7 @@ def render_admin_page(config: Dict[str, Any]) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ESP32-S3 LLM 管理后台</title>
+  <title>ESP32-S3 设备网关</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif; margin: 24px; color: #1f2933; }}
     main {{ max-width: 760px; margin: 0 auto; }}
@@ -236,14 +233,21 @@ def render_admin_page(config: Dict[str, Any]) -> str:
 </head>
 <body>
 <main>
-  <h1>ESP32-S3 LLM 管理后台</h1>
+  <h1>ESP32-S3 设备网关</h1>
   <p>API Key：{html.escape(api_key_note)} / 管理密码：{html.escape(password_note)} / 管理路径：{html.escape(secret_note)} / 设备 Token：{html.escape(device_token_note)}</p>
-  <label>大模型 URL</label>
+  <p class="hint">瘦网关模式：人格 / 记忆 / 模型选型 / 技能均在 Hermes 端配置，本后台只管设备接入与转发。</p>
+  <label>大模型 URL <span class="hint">（Hermes 地址，如 http://hermes:8642/v1）</span></label>
   <input id="base_url" value="{html.escape(str(config.get("base_url", "")))}">
-  <label>模型名</label>
+  <label>模型名 <span class="hint">（Hermes 端决定，通常填 hermes-agent）</span></label>
   <input id="model" value="{html.escape(str(config.get("model", "")))}">
-  <label>API Key</label>
+  <label>API Key <span class="hint">（Hermes 的 API_SERVER_KEY；真正的大模型 key 在 Hermes 端配）</span></label>
   <input id="api_key" type="password" placeholder="留空则不修改">
+  <label>记忆 Key <span class="hint">（长期记忆 scope；单用户填 owner，全设备共享）</span></label>
+  <input id="session_key" value="{html.escape(str(config.get("session_key", "")))}">
+  <label>请求超时（秒） <span class="hint">（Agent 多步较慢，建议 120~180）</span></label>
+  <input id="request_timeout" type="number" min="1" value="{html.escape(str(config.get("request_timeout", 60)))}">
+  <label>最大 prompt 字符数</label>
+  <input id="max_prompt_chars" type="number" min="1" value="{html.escape(str(config.get("max_prompt_chars", 2000)))}">
   <label>管理账号</label>
   <input id="admin_user" value="{html.escape(str(config.get("admin_user", "")))}" placeholder="登录用户名">
   <label>管理密码</label>
@@ -252,14 +256,6 @@ def render_admin_page(config: Dict[str, Any]) -> str:
   <input id="admin_path_secret" placeholder="留空则不修改">
   <label>设备 Token</label>
   <input id="device_token" type="password" placeholder="留空则不修改">
-  <label>最大 prompt 字符数</label>
-  <input id="max_prompt_chars" type="number" min="1" value="{html.escape(str(config.get("max_prompt_chars", 2000)))}">
-  <label>历史轮数</label>
-  <input id="history_limit" type="number" min="0" value="{html.escape(str(config.get("history_limit", 8)))}">
-  <label>全局提示词</label>
-  <textarea id="system_prompt">{html.escape(str(config.get("system_prompt", "")))}</textarea>
-  <label>用户信息记忆</label>
-  <textarea id="user_memory">{html.escape(str(config.get("user_memory", "")))}</textarea>
   <button onclick="saveConfig()">保存配置</button>
   <label>测试设备 ID</label>
   <input id="device_id" value="browser-test-device">
@@ -277,10 +273,9 @@ async function saveConfig() {{
   const payload = {{
     base_url: document.getElementById('base_url').value,
     model: document.getElementById('model').value,
-    max_prompt_chars: document.getElementById('max_prompt_chars').value,
-    history_limit: document.getElementById('history_limit').value,
-    system_prompt: document.getElementById('system_prompt').value,
-    user_memory: document.getElementById('user_memory').value
+    session_key: document.getElementById('session_key').value,
+    request_timeout: document.getElementById('request_timeout').value,
+    max_prompt_chars: document.getElementById('max_prompt_chars').value
   }};
   const key = document.getElementById('api_key').value;
   if (key) payload.api_key = key;
@@ -329,18 +324,17 @@ async function sendChat() {{
 def run(host: str, port: int, config_path: Path):
     store = app_core.ConfigStore(config_path)
     chat_service = app_core.ChatService(app_core.UrlLibJsonTransport())
-    conversation_store = ConversationStore(DEFAULT_CONVERSATIONS_PATH)
     httpd = ThreadingHTTPServer(
         (host, port),
-        make_handler(store, chat_service, conversation_store),
+        make_handler(store, chat_service),
     )
-    print(f"LLM admin listening on http://{host}:{port}")
+    print(f"Device gateway listening on http://{host}:{port}")
     print(f"Config file: {config_path}")
     httpd.serve_forever()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ESP32-S3 LLM admin backend")
+    parser = argparse.ArgumentParser(description="ESP32-S3 device gateway (ESP32 to Hermes)")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)

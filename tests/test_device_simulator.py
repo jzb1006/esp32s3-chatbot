@@ -1,7 +1,7 @@
 import unittest
 from unittest import mock
 
-from llm_admin import device_simulator
+from device_gateway import device_simulator
 
 
 class DeviceSimulatorTest(unittest.TestCase):

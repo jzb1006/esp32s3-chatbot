@@ -1,4 +1,4 @@
-# 只把 llm_admin 包打进镜像，其余一律排除
+# 只把 device_gateway 包打进镜像，其余一律排除
 **/__pycache__/
 *.py[cod]
 data/
