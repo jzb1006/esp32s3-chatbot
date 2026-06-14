@@ -1,5 +1,7 @@
 # ADR-001：会话/记忆状态归属迁移到 Hermes，中间件瘦身为设备网关并改名
 
+> **历史归档说明（2026-06-14）：** 本 ADR 记录 Python `device_gateway` 阶段的架构决策。服务端实现已迁移到 `/Users/jiangzhibin/workspace/chatbot-service-java`，本仓库后续只维护固件相关内容。
+
 | 状态 | 日期 | 决策者 |
 |------|------|--------|
 | Accepted | 2026-06-14 | jiangzhibin |

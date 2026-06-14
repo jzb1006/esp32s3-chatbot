@@ -1,5 +1,7 @@
 # 软件先行开发 Checklist 与计划
 
+> **历史归档说明（2026-06-14）：** 本计划记录服务端快速验证阶段，旧 Python `device_gateway` 已移出本仓库。当前仓库只维护固件相关内容，服务端后续在 `/Users/jiangzhibin/workspace/chatbot-service-java` 开发。
+
 > **状态（2026-06-13）：** 本计划列出的软件骨架已全部完成。完成后又新增了「云服务器 Docker 部署 + 管理后台安全加固 + 固件 `device_token` 支持」三项增量，见文末「计划完成后的增量」与 [`deployment.md`](deployment.md)。
 
 ## 目标

@@ -38,145 +38,71 @@ ESP32-S3 开发板的 WiFi 固件集合，核心是一个可用的 **WiFi 配网
 5. 异步连接，网页轮询显示「连接中 / 成功 / 失败」
 6. 连接成功 → 密码存进 NVS（掉电不丢）→ 关热点切 STA 正常工作
 7. 串口每 5 秒打印一次 `[STA] connected=1 ip=... rssi=...`
-8. 已联网后可通过串口命令访问 Python 设备网关：
-   - `admin http://<后台地址>:8766`：保存后台地址（线上后台见下方「设备网关」）
+8. 已联网后可通过串口命令访问 Java 服务端设备网关：
+   - `admin http://<服务端地址>:8766`：保存服务端地址（服务端见下方「服务端接口」）
    - `token <设备Token>`：保存设备 token（后台开启设备鉴权时用；留空清除）
    - `ask <问题>`：请求后台 `/api/chat` 并打印回答（自动携带已保存的 `X-Device-Token`）
    - `askstream <问题>`：请求后台 `/api/chat/stream`，按 SSE 增量打印回答
 
-> API Key 不写入 ESP32 固件；由 Python 后台保存并代理调用大模型。
+> API Key 不写入 ESP32 固件；由 Java 服务端保存并代理调用 Hermes / 大模型。
 
 当前板子实测已烧录该主固件。判断依据不要只看 `[STA] connected=1 ...` 心跳；应在串口输入 `help`，确认输出包含 `admin`、`token`、`ask`、`askstream` 命令。若有 STA 心跳但 `help` 无响应，优先怀疑板子仍是旧固件，需重新编译烧录当前 `esp32s3_wifi_provision`。
 
 ---
 
-## 设备网关（Hermes Agent）
+## 服务端接口（chatbot-service-java）
 
-当前最小版使用 Python 标准库实现，无需 FastAPI 等额外依赖。后台已经从直连大模型的 LLM 管理后台瘦身为 **ESP32-S3 → Hermes Agent** 的设备网关：
-
-- 管理页面：配置 Hermes URL、Hermes API Key、会话记忆 Key、管理凭据和设备 Token
-- JSON 接口：`POST /api/chat`、`POST /api/chat/stream`、`POST /api/conversations/new`（设备端）；`GET/POST /admin/<随机串>/api/config`（管理端）
-- 默认 Hermes 地址：`http://hermes:8642/v1`
-- 默认模型名：`hermes-agent`
-
-模型、人格、长期记忆和工具能力在 Hermes 端配置；设备网关只负责设备鉴权、prompt 限长、
-`conversation_id` 生成 / 透传和响应提取。
-
-> **后台已部署到云服务器（Docker）：`http://203.195.202.54:8766`。**
-> 部署架构、运维命令、安全说明、凭据重置见 [`docs/deployment.md`](docs/deployment.md)。
-
-### 1. 运行后台
-
-**线上（已部署）：** 腾讯云 Docker 容器常驻，访问 `http://203.195.202.54:8766`，无需手动启动；更新 / 运维见 [`docs/deployment.md`](docs/deployment.md)。
-
-**本地开发：**
-
-```bash
-cd /Users/jiangzhibin/Documents/ardiuno
-python3 -m device_gateway.server --host 0.0.0.0 --port 8766
-```
-
-### 管理页登录（安全加固）
-
-管理页采用**随机路径 + 账号密码登录（HTTP Basic Auth）**：
+服务端代码已经迁移到：
 
 ```text
-http://<后台地址>:8766/admin/<admin_path_secret>
+/Users/jiangzhibin/workspace/chatbot-service-java
 ```
 
-- 直接访问 `/admin` 或猜错随机串 → `404`（不暴露后台位置）
-- 打开正确地址后浏览器弹账号密码框，输入 `admin_user` / `admin_password` 才能进
-- 随机串、账号、密码在部署时随机生成，存于服务器 `data/llm_config.json`（忘记可按 [`docs/deployment.md`](docs/deployment.md) §6.5 重置）
+本仓库不再包含 Python `device_gateway`、Dockerfile、Compose 或服务端单元测试；后续只维护固件和固件测试。服务端需要保持下面的设备契约：
 
-### 2. 在后台配置
+| 接口 | 用途 |
+|---|---|
+| `POST /api/chat` | 普通文本聊天，返回 JSON `answer` |
+| `POST /api/chat/stream` | 流式文本聊天，返回 `text/event-stream` |
+| `POST /api/conversations/new` | 新建连续对话 ID |
 
-登录管理页后填写：
+固件会在已配置设备 Token 时携带 `X-Device-Token`。请求体字段仍为 `prompt`、可选 `device_id`、可选 `conversation_id`。
 
-- 大模型 URL：Hermes API 地址，例如 `http://hermes:8642/v1`
-- 模型名：通常填 `hermes-agent`（实际模型路由由 Hermes 决定）
-- API Key：Hermes 的 `API_SERVER_KEY`
-- 记忆 Key：长期记忆 scope，单用户可填 `owner`
-- 请求超时：例如 `120`
-- 管理账号 / 管理密码：登录管理页的账号密码（Basic Auth）
-- 管理路径随机串：管理页地址 `/admin/<随机串>` 的随机段（改后用新地址登录）
-- 设备 Token：保护 `/api/chat`（留空则设备免鉴权）
-- 最大 prompt 字符数：例如 `2000`
-
-配置会保存到：
-
-```text
-data/llm_config.json
-```
-
-> 该文件包含 API Key 与管理密码，已通过 `.gitignore` 忽略，不要提交。
-
-### 3. ESP32-S3 串口使用
+### ESP32-S3 串口使用
 
 打开串口：
 
 ```bash
-arduino-cli monitor -p /dev/cu.usbmodem101 -c baudrate=115200
+"/Users/jiangzhibin/Documents/ardiuno/.tools/arduino-cli" monitor -p /dev/cu.usbmodem101 -c baudrate=115200
 ```
 
 输入命令：
 
 ```text
 help
-admin http://<后台地址>:8766
+admin http://<服务端地址>:8766
 token <设备Token>
 ask 你好，用一句话介绍你自己
 askstream 你好，用一句话介绍你自己
 ```
 
-设备会向 Python 后台发送：
+设备会向 Java 服务端发送：
 
 ```text
 POST /api/chat
 ```
 
-后台再转发到 Hermes Agent，最后设备在串口打印 `LLM answer:`。
+服务端再转发到 Hermes Agent，最后设备在串口打印 `LLM answer:`。`askstream` 依赖 Java 服务端实现 `/api/chat/stream`；未实现时该命令会返回 HTTP 错误。
 
-### 4. 设备模拟器
-
-硬件音频模块接入前，可以先用 Python 模拟 ESP32 连续聊天：
-
-```bash
-python3 -m device_gateway.device_simulator \
-  --server http://127.0.0.1:8766 \
-  --device-id esp32-dev-001 \
-  --token "你的设备 Token"
-```
-
-流式模式：
-
-```bash
-python3 -m device_gateway.device_simulator \
-  --server http://127.0.0.1:8766 \
-  --device-id esp32-dev-001 \
-  --token "你的设备 Token" \
-  --stream
-```
-
-模拟器命令：
-
-```text
-/new   # 创建新会话
-/exit  # 退出
-```
-
-普通输入会发送到 `/api/chat`。模拟器加 `--stream` 时会发送到 `/api/chat/stream` 并打印流式事件。网关会把 `conversation_id` 透传给 Hermes，由 Hermes 维护短期多轮上下文。
-
-### 5. 会话与安全模型
+### 会话与安全模型
 
 - `device_id`：识别设备
 - `conversation_id`：识别一次连续对话
-- 同一 `conversation_id` 会透传为 Hermes 命名会话；网关不在本地保存对话历史
+- 同一 `conversation_id` 应透传为 Hermes 命名会话；服务端不应把长期记忆塞进固件
 - 新会话通过 `/api/conversations/new` 创建
-- 管理端：随机路径 `/admin/<随机串>` + 账号密码登录（HTTP Basic Auth）
 - 设备端：`/api/chat` 用 `X-Device-Token` 鉴权（设备 Token 为空时免鉴权）
-- 流式端：`/api/chat/stream` 返回 `text/event-stream`，先发送 `conversation` 事件，再透传 Hermes SSE
-- API Key、管理密码、路径随机串、设备 Token 不会从配置接口返回
-- 语音接口已预留：`POST /api/voice/chat`，当前返回 `voice_not_ready`
+- 流式端：`/api/chat/stream` 返回 `text/event-stream`，固件只打印 `response.output_text.delta` 的 `delta`
+- API Key、Hermes Key、服务端管理凭据不写入固件
 
 ### `esp32s3_wifi_self_test/` — 纯 WiFi 扫描自检
 
@@ -192,7 +118,8 @@ python3 -m device_gateway.device_simulator \
 
 ## 开发环境
 
-- `arduino-cli` + `esp32:esp32` core **3.3.10**
+- 项目内置 CLI：`.tools/arduino-cli`
+- `esp32:esp32` core **3.3.10**
 - arduino-cli 数据放在**项目本地目录**（已 `.gitignore`）：
   `.arduino-data/`、`.arduino-downloads/`、`.arduino-user/`
 - 第三方库（圆屏等）在 `.arduino-user/libraries/`：`Adafruit_BusIO`、`Adafruit_GFX`、`GC9A01A_AVR`
@@ -226,13 +153,13 @@ SKETCH="esp32s3_wifi_provision"   # 要烧的固件目录名
 ### 1. 编译（务必指定 `--output-dir`）
 
 ```bash
-arduino-cli compile --fqbn "$FQBN" --output-dir "build/$SKETCH" "$SKETCH"
+"$PWD/.tools/arduino-cli" compile --fqbn "$FQBN" --output-dir "build/$SKETCH" "$SKETCH"
 ```
 
 ### 2. 烧录（务必用 `--input-dir` 指向上一步的产物）
 
 ```bash
-arduino-cli upload -p "$PORT" --fqbn "$FQBN" --input-dir "build/$SKETCH" "$SKETCH"
+"$PWD/.tools/arduino-cli" upload -p "$PORT" --fqbn "$FQBN" --input-dir "build/$SKETCH" "$SKETCH"
 ```
 
 > 🔑 **必须用 `--output-dir` / `--input-dir` 显式指定产物目录**。
@@ -252,7 +179,7 @@ arduino-cli upload -p "$PORT" --fqbn "$FQBN" --input-dir "build/$SKETCH" "$SKETC
 ## 看串口输出
 
 ```bash
-arduino-cli monitor -p /dev/cu.usbmodem101 -c baudrate=115200
+"/Users/jiangzhibin/Documents/ardiuno/.tools/arduino-cli" monitor -p /dev/cu.usbmodem101 -c baudrate=115200
 ```
 
 > ⚠️ **HWCDC 的坑**：ESP32-S3 的 USB-Serial-JTAG 在「主机未建立连接」时会把 `Serial`

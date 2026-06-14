@@ -1,5 +1,7 @@
 # ESP32-S3 LLM 后台 × Hermes Agent 对接设计
 
+> **历史归档说明（2026-06-14）：** 本文档是 Python `device_gateway` 阶段的服务端设计评审稿。服务端实现已迁移到 `/Users/jiangzhibin/workspace/chatbot-service-java`，本仓库后续只维护固件相关内容。
+
 | 版本 | 日期 | 变更摘要 |
 |------|------|---------|
 | v1 | 2026-06-14 | 初版：评估把 Nous Research **Hermes Agent** 作为 `device_gateway` 后端的可行性；给出路径 A/B/C 对比、安全收紧清单、部署网络拓扑、超时与会话归属取舍、待拍板决策点 |

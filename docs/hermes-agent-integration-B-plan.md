@@ -1,5 +1,7 @@
 # 路径 B 实现方案 —— Hermes Agent 接管会话/记忆
 
+> **历史归档说明（2026-06-14）：** 本文档记录 Python `device_gateway` 阶段的服务端实现方案。服务端实现已迁移到 `/Users/jiangzhibin/workspace/chatbot-service-java`，本仓库后续只维护固件相关内容。
+
 | 版本 | 日期 | 变更摘要 |
 |------|------|---------|
 | v1 | 2026-06-14 | 初版：路径 B（Hermes 接管会话/记忆）详细实现方案。确定子路径 B-1（`/v1/chat/completions` + session headers），给出双层 ID 映射、数据模型变化、改动清单、spike 验证、AC+测试骨架、ADR 草案、回滚 |
