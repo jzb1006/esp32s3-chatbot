@@ -66,10 +66,18 @@ class ChatServiceTest(unittest.TestCase):
         def __init__(self, response):
             self.response = response
             self.calls = []
+            self.stream_calls = []
 
         def post_json(self, url, headers, payload, timeout):
             self.calls.append((url, headers, payload, timeout))
             return self.response
+
+        def post_stream(self, url, headers, payload, timeout):
+            self.stream_calls.append((url, headers, payload, timeout))
+            return [
+                b"event: response.output_text.delta\n",
+                'data: {"delta":"你"}\n\n'.encode("utf-8"),
+            ]
 
     def _config(self, **overrides):
         config = {
@@ -121,7 +129,33 @@ class ChatServiceTest(unittest.TestCase):
         self.assertEqual(payload["input"], "hello")
         self.assertEqual(payload["conversation"], "conv-1")
         self.assertTrue(payload["store"])
+        self.assertFalse(payload["stream"])
         # thin: persona/memory/history live in Hermes, not injected by middleware
+        self.assertNotIn("messages", payload)
+        self.assertNotIn("instructions", payload)
+        self.assertEqual(timeout, 150)
+
+    def test_stream_chat_forwards_to_responses_with_stream_enabled(self):
+        transport = self.FakeTransport({})
+        service = app_core.ChatService(transport)
+
+        chunks = list(service.stream_chat(self._config(), "hello", conversation_id="conv-1"))
+
+        self.assertEqual(
+            chunks,
+            [
+                b"event: response.output_text.delta\n",
+                'data: {"delta":"你"}\n\n'.encode("utf-8"),
+            ],
+        )
+        url, headers, payload, timeout = transport.stream_calls[0]
+        self.assertEqual(url, "http://hermes:8642/v1/responses")
+        self.assertEqual(headers["Authorization"], "Bearer srv-key")
+        self.assertEqual(headers["X-Hermes-Session-Key"], "owner")
+        self.assertEqual(payload["input"], "hello")
+        self.assertEqual(payload["conversation"], "conv-1")
+        self.assertTrue(payload["store"])
+        self.assertTrue(payload["stream"])
         self.assertNotIn("messages", payload)
         self.assertNotIn("instructions", payload)
         self.assertEqual(timeout, 150)

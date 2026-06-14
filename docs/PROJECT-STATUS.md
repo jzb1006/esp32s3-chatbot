@@ -43,7 +43,7 @@
 
 ### C. 语音链路（中长期 · `design` §14 roadmap）
 当前处于**阶段一（文本对话 + Hermes 记忆）= 已完成**。语音 6 层里只做了第 4 层（云端 LLM 大脑）。
-- [ ] **阶段二（流式）**：device_gateway 加 SSE 透传（如 `/api/chat/stream`），向 hermes 发 `stream:true` 边收边转；设备/模拟器读流。**纯云端、模拟器可验证、不依赖硬件**。
+- [x] **阶段二（流式，已部署）**：device_gateway 已加 `/api/chat/stream`，向 Hermes 发 `stream:true` 并透传 SSE；`device_simulator.py` 支持 `--stream` 逐段打印。已通过本地单元测试，并已部署到 `203.195.202.54:8766` 验证。
 - [ ] **阶段三（语音）**：
   - [ ] 音频硬件：I2S 麦克风 INMP441 + I2S 功放 MAX98357A + 喇叭。
   - [ ] 唤醒词：ESP-SR WakeNet（需 **Arduino → ESP-IDF 框架迁移**，或 TFLite Micro 自训）；先用内置词如 "Hi ESP"。

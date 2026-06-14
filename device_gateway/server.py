@@ -22,6 +22,27 @@ def read_json(handler: BaseHTTPRequestHandler) -> Dict[str, Any]:
     return json.loads(data)
 
 
+def parse_chat_request(config: Dict[str, str], values: Dict[str, Any]):
+    prompt = str(values.get("prompt", "")).strip()
+    if not prompt:
+        return None, {"status": 400, "body": {"error": "prompt is required"}}
+    max_prompt_chars = int(config["max_prompt_chars"])
+    if len(prompt) > max_prompt_chars:
+        return None, {"status": 413, "body": {"error": "prompt too long"}}
+    device_id = str(values.get("device_id", "default-device")).strip()
+    if not device_id:
+        device_id = "default-device"
+    conversation_id = str(values.get("conversation_id", "")).strip()
+    if not conversation_id:
+        conversation_id = uuid.uuid4().hex
+    return (device_id, conversation_id, prompt), None
+
+
+def sse_event(event: str, data: Dict[str, Any]) -> bytes:
+    payload = json.dumps(data, ensure_ascii=False)
+    return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
+
+
 def token_status(expected: str, actual: str) -> int:
     if not expected:
         return 200
@@ -116,24 +137,40 @@ def make_handler(
                     return
                 self.send_json(501, {"error": "voice_not_ready"})
                 return
+            if path == "/api/chat/stream":
+                if not self.require_device(config):
+                    return
+                parsed, error = parse_chat_request(config, read_json(self))
+                if error:
+                    self.send_json(error["status"], error["body"])
+                    return
+                device_id, conversation_id, prompt = parsed
+                self.start_sse()
+                self.wfile.write(
+                    sse_event(
+                        "conversation",
+                        {
+                            "device_id": device_id,
+                            "conversation_id": conversation_id,
+                        },
+                    )
+                )
+                try:
+                    for chunk in chat_service.stream_chat(
+                        config, prompt, conversation_id=conversation_id
+                    ):
+                        self.wfile.write(chunk)
+                except Exception as exc:
+                    self.wfile.write(sse_event("error", {"error": str(exc)}))
+                return
             if path == "/api/chat":
                 if not self.require_device(config):
                     return
-                values = read_json(self)
-                prompt = str(values.get("prompt", "")).strip()
-                if not prompt:
-                    self.send_json(400, {"error": "prompt is required"})
+                parsed, error = parse_chat_request(config, read_json(self))
+                if error:
+                    self.send_json(error["status"], error["body"])
                     return
-                max_prompt_chars = int(config["max_prompt_chars"])
-                if len(prompt) > max_prompt_chars:
-                    self.send_json(413, {"error": "prompt too long"})
-                    return
-                device_id = str(values.get("device_id", "default-device")).strip()
-                if not device_id:
-                    device_id = "default-device"
-                conversation_id = str(values.get("conversation_id", "")).strip()
-                if not conversation_id:
-                    conversation_id = uuid.uuid4().hex
+                device_id, conversation_id, prompt = parsed
                 # Thin gateway: forward to Hermes; Hermes owns conversation state via
                 # the named conversation (= conversation_id). No local history/mirror.
                 try:
@@ -172,6 +209,12 @@ def make_handler(
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
+
+        def start_sse(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
 
         def send_auth_challenge(self):
             # 401 + WWW-Authenticate makes the browser pop the username/password dialog.

@@ -50,7 +50,7 @@ ESP32-S3 开发板的 WiFi 固件集合，核心是一个可用的 **WiFi 配网
 当前最小版使用 Python 标准库实现，无需 FastAPI 等额外依赖。后台已经从直连大模型的 LLM 管理后台瘦身为 **ESP32-S3 → Hermes Agent** 的设备网关：
 
 - 管理页面：配置 Hermes URL、Hermes API Key、会话记忆 Key、管理凭据和设备 Token
-- JSON 接口：`POST /api/chat`、`POST /api/conversations/new`（设备端）；`GET/POST /admin/<随机串>/api/config`（管理端）
+- JSON 接口：`POST /api/chat`、`POST /api/chat/stream`、`POST /api/conversations/new`（设备端）；`GET/POST /admin/<随机串>/api/config`（管理端）
 - 默认 Hermes 地址：`http://hermes:8642/v1`
 - 默认模型名：`hermes-agent`
 
@@ -141,6 +141,16 @@ python3 -m device_gateway.device_simulator \
   --token "你的设备 Token"
 ```
 
+流式模式：
+
+```bash
+python3 -m device_gateway.device_simulator \
+  --server http://127.0.0.1:8766 \
+  --device-id esp32-dev-001 \
+  --token "你的设备 Token" \
+  --stream
+```
+
 模拟器命令：
 
 ```text
@@ -158,6 +168,7 @@ python3 -m device_gateway.device_simulator \
 - 新会话通过 `/api/conversations/new` 创建
 - 管理端：随机路径 `/admin/<随机串>` + 账号密码登录（HTTP Basic Auth）
 - 设备端：`/api/chat` 用 `X-Device-Token` 鉴权（设备 Token 为空时免鉴权）
+- 流式端：`/api/chat/stream` 返回 `text/event-stream`，先发送 `conversation` 事件，再透传 Hermes SSE
 - API Key、管理密码、路径随机串、设备 Token 不会从配置接口返回
 - 语音接口已预留：`POST /api/voice/chat`，当前返回 `voice_not_ready`
 

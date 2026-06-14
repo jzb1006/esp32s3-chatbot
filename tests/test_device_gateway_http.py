@@ -11,10 +11,16 @@ from device_gateway import server
 class FakeChatService:
     def __init__(self):
         self.calls = []
+        self.stream_calls = []
 
     def chat(self, config, prompt, conversation_id=None):
         self.calls.append((config, prompt, conversation_id))
         return f"answer:{prompt}"
+
+    def stream_chat(self, config, prompt, conversation_id=None):
+        self.stream_calls.append((config, prompt, conversation_id))
+        yield b"event: response.output_text.delta\n"
+        yield 'data: {"delta":"你"}\n\n'.encode("utf-8")
 
 
 class HttpHandlerTest(unittest.TestCase):
@@ -65,6 +71,44 @@ class HttpHandlerTest(unittest.TestCase):
 
         response_body = handler.wfile.write.call_args[0][0]
         return handler.responses, json.loads(response_body.decode("utf-8"))
+
+    def call_raw(self, handler_cls, method, path, payload=None, headers=None):
+        body = b""
+        headers = dict(headers or {})
+        if payload is not None:
+            body = json.dumps(payload).encode("utf-8")
+            headers["Content-Length"] = str(len(body))
+
+        handler = object.__new__(handler_cls)
+        handler.rfile = mock.Mock()
+        handler.rfile.read.return_value = body
+        handler.wfile = mock.Mock()
+        handler.headers = headers
+        handler.path = path
+        handler.command = method
+        handler.request_version = "HTTP/1.1"
+        handler.responses = []
+
+        def send_response(code, message=None):
+            handler.responses.append(("status", code))
+
+        def send_header(name, value):
+            handler.responses.append(("header", name, value))
+
+        def end_headers():
+            handler.responses.append(("end",))
+
+        handler.send_response = send_response
+        handler.send_header = send_header
+        handler.end_headers = end_headers
+
+        if method == "POST":
+            handler.do_POST()
+        else:
+            raise AssertionError(method)
+
+        chunks = [call.args[0] for call in handler.wfile.write.call_args_list]
+        return handler.responses, b"".join(chunks)
 
     def test_get_config_returns_public_config(self):
         handler_cls, store, _ = self.make_handler()
@@ -214,6 +258,27 @@ class HttpHandlerTest(unittest.TestCase):
         )
 
         self.assertIn(("status", 413), responses)
+
+    def test_stream_chat_forwards_sse_with_generated_conversation_id(self):
+        handler_cls, store, chat_service = self.make_handler()
+        store.update({"api_key": "srv-key"})
+
+        responses, body = self.call_raw(
+            handler_cls,
+            "POST",
+            "/api/chat/stream",
+            {"prompt": "你好"},
+        )
+
+        self.assertIn(("status", 200), responses)
+        self.assertIn(("header", "Content-Type", "text/event-stream; charset=utf-8"), responses)
+        text = body.decode("utf-8")
+        self.assertIn("event: conversation", text)
+        self.assertIn('"device_id": "default-device"', text)
+        self.assertIn('"conversation_id":', text)
+        self.assertIn("event: response.output_text.delta", text)
+        self.assertEqual(chat_service.stream_calls[0][1], "你好")
+        self.assertTrue(chat_service.stream_calls[0][2])
 
     def test_new_conversation_endpoint_requires_device_token_and_returns_id(self):
         handler_cls, store, _ = self.make_handler()

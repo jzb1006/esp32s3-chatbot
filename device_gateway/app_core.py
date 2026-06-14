@@ -69,7 +69,7 @@ def sanitize_session_key(value: str, max_len: int = 256) -> str:
 
 
 def build_responses_payload(
-    config: Dict[str, str], prompt: str, conversation_id: str = None
+    config: Dict[str, str], prompt: str, conversation_id: str = None, stream: bool = False
 ) -> Dict[str, Any]:
     # Thin gateway: Hermes owns persona / memory / model / skills. We send only the
     # user input plus the named `conversation` (= conversation_id) so Hermes keeps
@@ -78,7 +78,7 @@ def build_responses_payload(
         "model": config.get("model", "").strip() or DEFAULT_CONFIG["model"],
         "input": prompt,
         "store": True,
-        "stream": False,
+        "stream": stream,
     }
     if conversation_id:
         payload["conversation"] = conversation_id
@@ -140,6 +140,31 @@ class UrlLibJsonTransport:
             raise RuntimeError(f"Hermes HTTP {exc.code}: {detail}") from exc
         return json.loads(data)
 
+    def post_stream(
+        self,
+        url: str,
+        headers: Dict[str, str],
+        payload: Dict[str, Any],
+        timeout: int,
+    ):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                while True:
+                    chunk = response.read(4096)
+                    if not chunk:
+                        break
+                    yield chunk
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")
+            raise RuntimeError(f"Hermes HTTP {exc.code}: {detail}") from exc
+
 
 class ChatService:
     def __init__(self, transport: UrlLibJsonTransport):
@@ -177,3 +202,32 @@ class ChatService:
             timeout=_resolve_timeout(config),
         )
         return extract_output_text(response)
+
+    def stream_chat(
+        self,
+        config: Dict[str, str],
+        prompt: str,
+        conversation_id: str = None,
+    ):
+        api_key = config.get("api_key", "").strip()
+        if not api_key:
+            raise ValueError("API Key is required")
+
+        base_url = config.get("base_url", "").strip().rstrip("/")
+        if not base_url:
+            raise ValueError("base_url is required")
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        session_key = sanitize_session_key(config.get("session_key", ""))
+        if session_key:
+            headers["X-Hermes-Session-Key"] = session_key
+
+        yield from self.transport.post_stream(
+            f"{base_url}/responses",
+            headers,
+            build_responses_payload(config, prompt, conversation_id, stream=True),
+            timeout=_resolve_timeout(config),
+        )
