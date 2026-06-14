@@ -29,6 +29,14 @@
 - **device_gateway**：迁移 `/opt/llm_admin`→`/opt/device_gateway`，build + 起(接 hermes-net)，配置对接 hermes。
 - **验证**：spike S-A 命名会话多轮通过；端到端「设备→网关→hermes→DeepSeek」通 + 多轮记忆生效（热响应 ~1s）。
 
+### 4. 当前 ESP32-S3 板子烧录状态（2026-06-14 实测）
+- **当前烧录固件**：`esp32s3_wifi_provision`，使用 FQBN `esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc` 重新编译并烧录到 `/dev/cu.usbmodem101`。
+- **烧录证据**：esptool 识别芯片 `ESP32-S3 (QFN56) rev v0.2`、MAC `84:fc:e6:66:40:4c`，写入 bootloader / partitions / app 后均 `Hash of data verified`。
+- **运行证据**：启动串口打印 `=== ESP32-S3 WiFi provisioning ===`，`help` 会列出 `admin` / `token` / `ask` 命令；每 5 秒打印 `[STA] connected=1 ip=192.168.3.219 ...`。
+- **当前 NVS 配置**：`admin` 已设置为 `http://203.195.202.54:8766`，`device_token` 已设置（明文在本地 `data/device_token.txt`，不入库）。
+- **端到端验证**：串口执行 `ask 请只回复：pong`，设备请求 `POST http://203.195.202.54:8766/api/chat`，返回 `LLM answer: pong`。
+- **踩坑记录**：如果只看到 `[STA] connected=1 ...`，但发送 `help` 没有任何响应，不能判定当前固件就是仓库最新版；这次就是旧固件仍能打印 STA 心跳但不响应命令。下次先用 `help` 输出确认命令集，再判断是否需要重新烧录。
+
 ---
 
 ## 二、未完成 / 后期继续 ⏳
@@ -68,4 +76,5 @@
 | 底层模型 | DeepSeek（`deepseek-chat` → 实际 `deepseek-v4-flash`）|
 | 部署后验证 | `HERMES_URL=http://127.0.0.1:8642/v1 API_KEY=<key> bash docs/hermes-spike.sh` |
 | 管理后台 | `http://203.195.202.54:8766/admin/<随机串>`（Basic Auth，凭据已迁移保留）|
+| 当前板子固件 | `esp32s3_wifi_provision` 已烧录；串口 `help` 可见 `admin` / `token` / `ask`；`ask 请只回复：pong` 已通过 |
 </content>

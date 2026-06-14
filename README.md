@@ -43,6 +43,8 @@ ESP32-S3 开发板的 WiFi 固件集合，核心是一个可用的 **WiFi 配网
 
 > API Key 不写入 ESP32 固件；由 Python 后台保存并代理调用大模型。
 
+当前板子实测已烧录该主固件。判断依据不要只看 `[STA] connected=1 ...` 心跳；应在串口输入 `help`，确认输出包含 `admin`、`token`、`ask` 三个命令。若有 STA 心跳但 `help` 无响应，优先怀疑板子仍是旧固件，需重新编译烧录当前 `esp32s3_wifi_provision`。
+
 ---
 
 ## 设备网关（Hermes Agent）
