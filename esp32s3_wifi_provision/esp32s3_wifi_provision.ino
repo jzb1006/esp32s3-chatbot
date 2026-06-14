@@ -165,12 +165,29 @@ String extractJsonString(const String &json, const String &key) {
   return "";
 }
 
+String buildAdminEndpoint(const char *path) {
+  String adminUrl = loadAdminUrl();
+  if (adminUrl.endsWith("/")) {
+    adminUrl.remove(adminUrl.length() - 1);
+  }
+  return adminUrl + path;
+}
+
+void addJsonDeviceHeaders(HTTPClient &http) {
+  http.addHeader("Content-Type", "application/json");
+  String deviceToken = loadDeviceToken();
+  if (deviceToken.length() > 0) {
+    http.addHeader("X-Device-Token", deviceToken);
+  }
+}
+
 void printCommandHelp() {
   Serial.println("Commands:");
   Serial.println("  help");
   Serial.println("  admin <http://host:8766>");
   Serial.println("  token <device-token>   (empty to clear)");
   Serial.println("  ask <prompt>");
+  Serial.println("  askstream <prompt>");
   Serial.printf("Current admin URL: %s\n", loadAdminUrl().c_str());
   Serial.printf("Device token: %s\n", loadDeviceToken().length() > 0 ? "set" : "unset");
 }
@@ -181,24 +198,15 @@ void askAdminBackend(const String &prompt) {
     return;
   }
 
-  String adminUrl = loadAdminUrl();
-  if (adminUrl.endsWith("/")) {
-    adminUrl.remove(adminUrl.length() - 1);
-  }
-
   HTTPClient http;
   http.setTimeout(ADMIN_CHAT_TIMEOUT_MS);
-  String endpoint = adminUrl + "/api/chat";
+  String endpoint = buildAdminEndpoint("/api/chat");
   Serial.printf("POST %s\n", endpoint.c_str());
   if (!http.begin(endpoint)) {
     Serial.println("HTTP begin failed.");
     return;
   }
-  http.addHeader("Content-Type", "application/json");
-  String deviceToken = loadDeviceToken();
-  if (deviceToken.length() > 0) {
-    http.addHeader("X-Device-Token", deviceToken);
-  }
+  addJsonDeviceHeaders(http);
 
   String body = "{\"prompt\":\"" + jsonEscape(prompt) + "\"}";
   int code = http.POST(body);
@@ -220,6 +228,115 @@ void askAdminBackend(const String &prompt) {
 
   Serial.println("LLM answer:");
   Serial.println(answer);
+}
+
+void dispatchSseEvent(const String &eventName, const String &dataLine, bool &printedAny) {
+  if (eventName == "response.output_text.delta") {
+    String delta = extractJsonString(dataLine, "delta");
+    if (delta.length() > 0) {
+      Serial.print(delta);
+      printedAny = true;
+    }
+  } else if (eventName == "error") {
+    String error = extractJsonString(dataLine, "error");
+    Serial.println();
+    Serial.print("LLM stream error: ");
+    Serial.println(error.length() > 0 ? error : dataLine);
+  }
+}
+
+void processSseLine(String line, String &eventName, String &dataLine, bool &printedAny) {
+  if (line.endsWith("\r")) {
+    line.remove(line.length() - 1);
+  }
+  if (line.length() == 0) {
+    dispatchSseEvent(eventName, dataLine, printedAny);
+    eventName = "";
+    dataLine = "";
+    return;
+  }
+  if (line.startsWith("event:")) {
+    eventName = line.substring(6);
+    eventName.trim();
+    return;
+  }
+  if (line.startsWith("data:")) {
+    String payload = line.substring(5);
+    if (payload.startsWith(" ")) {
+      payload.remove(0, 1);
+    }
+    if (dataLine.length() > 0) {
+      dataLine += "\n";
+    }
+    dataLine += payload;
+  }
+}
+
+void askStreamAdminBackend(const String &prompt) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi is not connected; cannot call admin backend.");
+    return;
+  }
+
+  HTTPClient http;
+  http.setTimeout(ADMIN_CHAT_TIMEOUT_MS);
+  String endpoint = buildAdminEndpoint("/api/chat/stream");
+  Serial.printf("POST %s\n", endpoint.c_str());
+  if (!http.begin(endpoint)) {
+    Serial.println("HTTP begin failed.");
+    return;
+  }
+  addJsonDeviceHeaders(http);
+  http.addHeader("Accept", "text/event-stream");
+
+  String body = "{\"prompt\":\"" + jsonEscape(prompt) + "\"}";
+  int code = http.POST(body);
+  if (code != 200) {
+    String response = http.getString();
+    http.end();
+    Serial.printf("LLM stream backend failed: HTTP %d\n", code);
+    Serial.println(response);
+    return;
+  }
+
+  Serial.println("LLM stream:");
+  NetworkClient *stream = http.getStreamPtr();
+  int len = http.getSize();
+  String line;
+  String eventName;
+  String dataLine;
+  bool printedAny = false;
+
+  while (http.connected() && (len > 0 || len == -1)) {
+    size_t size = stream->available();
+    if (size) {
+      char c = (char)stream->read();
+      if (len > 0) {
+        len--;
+      }
+      if (c == '\n') {
+        processSseLine(line, eventName, dataLine, printedAny);
+        line = "";
+      } else {
+        line += c;
+      }
+    } else {
+      delay(1);
+    }
+  }
+
+  if (line.length() > 0) {
+    processSseLine(line, eventName, dataLine, printedAny);
+  }
+  if (eventName.length() > 0 || dataLine.length() > 0) {
+    dispatchSseEvent(eventName, dataLine, printedAny);
+  }
+  http.end();
+
+  if (printedAny) {
+    Serial.println();
+  }
+  Serial.println("LLM stream done.");
 }
 
 void handleSerialLine(String line) {
@@ -251,6 +368,14 @@ void handleSerialLine(String line) {
       return;
     }
     askAdminBackend(prompt);
+  } else if (line.startsWith("askstream ")) {
+    String prompt = line.substring(10);
+    prompt.trim();
+    if (prompt.length() == 0) {
+      Serial.println("Prompt is empty.");
+      return;
+    }
+    askStreamAdminBackend(prompt);
   } else {
     Serial.println("Unknown command. Type help.");
   }

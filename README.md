@@ -14,6 +14,8 @@ ESP32-S3 开发板的 WiFi 固件集合，核心是一个可用的 **WiFi 配网
 | USB | **原生 USB-Serial-JTAG**（VID `0x303A` / PID `0x1001`，即 HWCDC）|
 | 串口（macOS）| `/dev/cu.usbmodem101` |
 | 出厂 MAC | `84:FC:E6:66:40:4C` |
+| Flash | 16MB（esptool `flash_id` 实测）|
+| PSRAM | 8MB（esptool 连接信息实测）|
 
 > 这块板用的是 ESP32-S3 内置的 USB-Serial-JTAG，不是 CH340/CP2102 串口桥。
 > 这点决定了下面编译选项和看串口的方式。
@@ -40,10 +42,11 @@ ESP32-S3 开发板的 WiFi 固件集合，核心是一个可用的 **WiFi 配网
    - `admin http://<后台地址>:8766`：保存后台地址（线上后台见下方「设备网关」）
    - `token <设备Token>`：保存设备 token（后台开启设备鉴权时用；留空清除）
    - `ask <问题>`：请求后台 `/api/chat` 并打印回答（自动携带已保存的 `X-Device-Token`）
+   - `askstream <问题>`：请求后台 `/api/chat/stream`，按 SSE 增量打印回答
 
 > API Key 不写入 ESP32 固件；由 Python 后台保存并代理调用大模型。
 
-当前板子实测已烧录该主固件。判断依据不要只看 `[STA] connected=1 ...` 心跳；应在串口输入 `help`，确认输出包含 `admin`、`token`、`ask` 三个命令。若有 STA 心跳但 `help` 无响应，优先怀疑板子仍是旧固件，需重新编译烧录当前 `esp32s3_wifi_provision`。
+当前板子实测已烧录该主固件。判断依据不要只看 `[STA] connected=1 ...` 心跳；应在串口输入 `help`，确认输出包含 `admin`、`token`、`ask`、`askstream` 命令。若有 STA 心跳但 `help` 无响应，优先怀疑板子仍是旧固件，需重新编译烧录当前 `esp32s3_wifi_provision`。
 
 ---
 
@@ -122,6 +125,7 @@ help
 admin http://<后台地址>:8766
 token <设备Token>
 ask 你好，用一句话介绍你自己
+askstream 你好，用一句话介绍你自己
 ```
 
 设备会向 Python 后台发送：
@@ -160,7 +164,7 @@ python3 -m device_gateway.device_simulator \
 /exit  # 退出
 ```
 
-普通输入会发送到 `/api/chat`。网关会把 `conversation_id` 透传给 Hermes，由 Hermes 维护短期多轮上下文。
+普通输入会发送到 `/api/chat`。模拟器加 `--stream` 时会发送到 `/api/chat/stream` 并打印流式事件。网关会把 `conversation_id` 透传给 Hermes，由 Hermes 维护短期多轮上下文。
 
 ### 5. 会话与安全模型
 
@@ -208,13 +212,16 @@ export ARDUINO_DIRECTORIES_DATA="$PWD/.arduino-data"
 export ARDUINO_DIRECTORIES_DOWNLOADS="$PWD/.arduino-downloads"
 export ARDUINO_DIRECTORIES_USER="$PWD/.arduino-user"
 
-FQBN="esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc"
+FQBN="esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB"
 PORT="/dev/cu.usbmodem101"
 SKETCH="esp32s3_wifi_provision"   # 要烧的固件目录名
 ```
 
 > 🔑 **`CDCOnBoot=cdc` 必须加**！这块板是原生 USB-Serial-JTAG，不加这个选项的话
 > `Serial.print` 会走物理 UART0 引脚（GPIO43/44），从 USB 口**完全看不到输出**。
+>
+> 当前板子实测 Flash 为 16MB。默认 4MB 分区只有 1.2MB APP，当前固件会显示约 81%；使用上面的
+> `FlashSize=16M,PartitionScheme=app3M_fat9M_16MB` 后 APP 分区为 3MB，当前固件约占 33%，更适合后续加入音频链路。
 
 ### 1. 编译（务必指定 `--output-dir`）
 

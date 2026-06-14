@@ -3,6 +3,8 @@
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | v1 | 2026-06-14 | 初版：进度总账 + 待办清单，供后期继续 |
+| v2 | 2026-06-14 | 新增固件端 `askstream` 流式命令，已完成单元测试、编译、烧录与串口实测 |
+| v3 | 2026-06-14 | 确认板载 Flash 为 16MB，并已切换到 16M/3MB APP 分区烧录验证 |
 
 > 进度总账 + 待办。详细决策见 [`adr/ADR-001-session-state-ownership.md`](./adr/ADR-001-session-state-ownership.md)、实现方案见 [`hermes-agent-integration-B-plan.md`](./hermes-agent-integration-B-plan.md)、部署见 [`deployment.md`](./deployment.md) §11。
 
@@ -37,6 +39,22 @@
 - **端到端验证**：串口执行 `ask 请只回复：pong`，设备请求 `POST http://203.195.202.54:8766/api/chat`，返回 `LLM answer: pong`。
 - **踩坑记录**：如果只看到 `[STA] connected=1 ...`，但发送 `help` 没有任何响应，不能判定当前固件就是仓库最新版；这次就是旧固件仍能打印 STA 心跳但不响应命令。下次先用 `help` 输出确认命令集，再判断是否需要重新烧录。
 
+### 5. 固件端流式命令（已烧录，已实测）
+- **新增命令**：`askstream <prompt>`。
+- **请求链路**：ESP32-S3 串口命令 → `POST /api/chat/stream` → 网关透传 Hermes SSE。
+- **解析行为**：忽略 `conversation` 等非文本事件，只打印 `response.output_text.delta` 的 `delta` 字段；错误事件打印 `LLM stream error:`。
+- **验证状态**：`python3 -m unittest discover -s tests -v` 已通过 26 项；`arduino-cli compile` 已通过（程序存储 81%，动态内存 14%）。
+- **烧录状态**：已烧录到 `/dev/cu.usbmodem101`，esptool 识别 MAC `84:fc:e6:66:40:4c`，写入 app 后 `Hash of data verified`。
+- **端到端验证**：串口 `help` 已出现 `askstream`；执行 `askstream 请只回复：pong` 请求 `POST http://203.195.202.54:8766/api/chat/stream`，返回 `pong`。
+
+### 6. Flash / 分区容量确认
+- **实际硬件容量**：`esptool flash_id` 检测到 Flash 为 16MB，连接信息显示 PSRAM 8MB。
+- **当前已烧录分区**：`FlashSize=16M,PartitionScheme=app3M_fat9M_16MB`，APP 分区 3MB。
+- **当前 FQBN**：`esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB`。
+- **试编译结果**：上述 16M/3MB APP 分区编译通过，当前固件占 1,065,493 / 3,145,728 bytes（33%），动态内存仍为 14%。
+- **烧录结果**：已重新上传 bootloader、partition table 和 app；esptool 对三段均返回 `Hash of data verified`。
+- **复验结果**：NVS 配置保留，串口 `help` 显示 `admin` / `token` / `ask` / `askstream`；`ask 请只回复：pong` 与 `askstream 请只回复：pong` 均返回 `pong`。
+
 ---
 
 ## 二、未完成 / 后期继续 ⏳
@@ -51,7 +69,7 @@
 
 ### C. 语音链路（中长期 · `design` §14 roadmap）
 当前处于**阶段一（文本对话 + Hermes 记忆）= 已完成**。语音 6 层里只做了第 4 层（云端 LLM 大脑）。
-- [x] **阶段二（流式，已部署）**：device_gateway 已加 `/api/chat/stream`，向 Hermes 发 `stream:true` 并透传 SSE；`device_simulator.py` 支持 `--stream` 逐段打印。已通过本地单元测试，并已部署到 `203.195.202.54:8766` 验证。
+- [x] **阶段二（流式，已部署）**：device_gateway 已加 `/api/chat/stream`，向 Hermes 发 `stream:true` 并透传 SSE；`device_simulator.py` 支持 `--stream` 逐段打印；固件已新增 `askstream` 命令并完成烧录实测。
 - [ ] **阶段三（语音）**：
   - [ ] 音频硬件：I2S 麦克风 INMP441 + I2S 功放 MAX98357A + 喇叭。
   - [ ] 唤醒词：ESP-SR WakeNet（需 **Arduino → ESP-IDF 框架迁移**，或 TFLite Micro 自训）；先用内置词如 "Hi ESP"。
@@ -76,5 +94,6 @@
 | 底层模型 | DeepSeek（`deepseek-chat` → 实际 `deepseek-v4-flash`）|
 | 部署后验证 | `HERMES_URL=http://127.0.0.1:8642/v1 API_KEY=<key> bash docs/hermes-spike.sh` |
 | 管理后台 | `http://203.195.202.54:8766/admin/<随机串>`（Basic Auth，凭据已迁移保留）|
-| 当前板子固件 | `esp32s3_wifi_provision` 已烧录；串口 `help` 可见 `admin` / `token` / `ask`；`ask 请只回复：pong` 已通过 |
+| 当前板子固件 | `esp32s3_wifi_provision` 已按 16MB/3MB APP 分区烧录；串口 `help` 可见 `admin` / `token` / `ask` / `askstream`；`ask 请只回复：pong` 与 `askstream 请只回复：pong` 均已通过 |
+| 当前编译分区 | 16MB Flash + `PartitionScheme=app3M_fat9M_16MB`，当前固件占 APP 33% |
 </content>

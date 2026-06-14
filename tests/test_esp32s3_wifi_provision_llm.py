@@ -25,6 +25,16 @@ class WifiProvisionLlmSketchTest(unittest.TestCase):
         self.assertIn('line.startsWith("ask ")', sketch)
         self.assertIn("processSerialCommands();", sketch)
 
+    def test_wifi_provision_supports_streaming_ask_command(self):
+        sketch = self.read_sketch()
+
+        self.assertIn('Serial.println("  askstream <prompt>");', sketch)
+        self.assertIn('line.startsWith("askstream ")', sketch)
+        self.assertIn('"/api/chat/stream"', sketch)
+        self.assertIn('"Accept", "text/event-stream"', sketch)
+        self.assertIn("http.getStreamPtr()", sketch)
+        self.assertIn("response.output_text.delta", sketch)
+
     def test_wifi_provision_keeps_api_key_out_of_firmware(self):
         sketch = self.read_sketch().lower()
 
