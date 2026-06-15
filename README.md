@@ -20,6 +20,20 @@ ESP32-S3 开发板的 WiFi 固件集合，核心是一个可用的 **WiFi 配网
 > 这块板用的是 ESP32-S3 内置的 USB-Serial-JTAG，不是 CH340/CP2102 串口桥。
 > 这点决定了下面编译选项和看串口的方式。
 
+### 音频模块接线
+
+LMD2718 + NS4168 音频模块已接入当前 ESP32-S3 开发板，针脚对应如下：
+
+| 音频模块 | ESP32-S3 开发板 |
+|---|---|
+| GND | GND |
+| VCC | 3V3 |
+| CLK | GPIO5 |
+| DATA | GPIO6 |
+| SDA | GPIO7 |
+| BCLK | GPIO15 |
+| LRCLK | GPIO16 |
+
 ---
 
 ## 固件一览

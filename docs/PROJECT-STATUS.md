@@ -6,6 +6,7 @@
 | v2 | 2026-06-14 | 新增固件端 `askstream` 流式命令 |
 | v3 | 2026-06-14 | 确认 16MB Flash，并切换到 16M/3MB APP 分区 |
 | v4 | 2026-06-14 | 服务端迁移到 `chatbot-service-java`；本仓库只保留固件相关内容 |
+| v5 | 2026-06-15 | 记录 LMD2718 + NS4168 音频模块已接入及针脚对应 |
 
 ---
 
@@ -38,6 +39,7 @@
 - `ask` 调用服务端 `POST /api/chat`
 - `askstream` 调用服务端 `POST /api/chat/stream`
 - 已确认 ESP32-S3 Flash 16MB、PSRAM 8MB；当前 APP 分区 3MB
+- LMD2718 + NS4168 音频模块已接入：`CLK=GPIO5`、`DATA=GPIO6`、`SDA=GPIO7`、`BCLK=GPIO15`、`LRCLK=GPIO16`，供电为 `3V3` / `GND`
 
 ### 2. 服务端迁移
 
@@ -59,7 +61,7 @@
 - [ ] 根据 Java 服务端实际部署地址，重新通过串口执行 `admin http://<服务端地址>:8766`。
 - [ ] 如服务端启用设备鉴权，通过串口执行 `token <设备Token>`。
 - [ ] 固件 `.ino` 里仍有 `LLM`、`admin backend` 等旧文案，可在下次固件改动时顺手改成“服务端”。
-- [ ] 后续接入音频硬件后，先做 I2S 麦克风 / 功放自检，再扩展语音链路。
+- [ ] 音频硬件已接入；下一步先做 I2S 麦克风 / 功放自检，再扩展语音链路。
 
 ---
 
@@ -73,5 +75,6 @@
 | 串口 | `/dev/cu.usbmodem101` |
 | USB | ESP32-S3 原生 USB-Serial-JTAG，需 `CDCOnBoot=cdc` |
 | Flash / PSRAM | 16MB / 8MB |
+| 音频模块 | LMD2718 + NS4168 已接入；`CLK=GPIO5`、`DATA=GPIO6`、`SDA=GPIO7`、`BCLK=GPIO15`、`LRCLK=GPIO16` |
 | 当前编译分区 | `FlashSize=16M,PartitionScheme=app3M_fat9M_16MB` |
 | 固件 HTTP 契约 | `/api/chat`、`/api/chat/stream`、`/api/conversations/new` |
