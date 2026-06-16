@@ -3,6 +3,7 @@
 #include <DNSServer.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include <ESP_I2S.h>
 
 // ESP32-S3 WiFi provisioning via captive portal.
 //
@@ -27,8 +28,23 @@ const unsigned long STA_CONNECT_TIMEOUT_MS = 15000;
 const unsigned long AP_LINGER_AFTER_SUCCESS_MS = 8000;  // keep AP up so the
                                                         // success page loads
 const char *PREFS_NAMESPACE = "wifi";
-const char *DEFAULT_ADMIN_URL = "http://192.168.3.100:8766";
+const char *DEFAULT_ADMIN_URL = "http://203.195.202.54:8766";
+const char *DEFAULT_WS_URL = "ws://203.195.202.54:8766/xiaozhi/v1";
 const unsigned long ADMIN_CHAT_TIMEOUT_MS = 65000;
+const unsigned long WS_TIMEOUT_MS = 12000;
+const size_t WS_MAX_TEXT_FRAME = 2048;
+const int PDM_MIC_CLK_PIN = 20;
+const int PDM_MIC_DATA_PIN = 22;
+const int AUDIO_BCLK_PIN = 18;
+const int AUDIO_LRCLK_PIN = 19;
+const int AUDIO_SDATA_PIN = 21;
+const uint32_t MIC_SAMPLE_RATE = 48000;
+const size_t MIC_READ_SAMPLES = 512;
+const unsigned long MIC_TEST_MS = 3000;
+const uint32_t SPEAKER_SAMPLE_RATE = 16000;
+const uint16_t SPEAKER_TONE_HZ = 880;
+const int16_t SPEAKER_TONE_AMPLITUDE = 2500;
+const unsigned long SPEAKER_TEST_MS = 1000;
 
 // ---------- state ----------
 enum PortalState { PS_IDLE, PS_CONNECTING, PS_SUCCESS, PS_FAILED };
@@ -36,6 +52,8 @@ enum PortalState { PS_IDLE, PS_CONNECTING, PS_SUCCESS, PS_FAILED };
 DNSServer dnsServer;
 WebServer server(80);
 Preferences prefs;
+I2SClass micI2S;
+I2SClass speakerI2S;
 
 bool provisioning = false;
 String cachedOptions;  // cached <option> list from the last scan
@@ -45,6 +63,7 @@ bool connectRequested = false;
 unsigned long connectStartAt = 0;
 unsigned long switchToStaAt = 0;  // 0 = no pending switch to STA-only
 String serialLine;
+bool micReady = false;
 
 // ---------- credentials (NVS) ----------
 bool loadCredentials(String &ssid, String &pass) {
@@ -72,6 +91,19 @@ String loadAdminUrl() {
 void saveAdminUrl(const String &url) {
   prefs.begin(PREFS_NAMESPACE, false);
   prefs.putString("admin_url", url);
+  prefs.end();
+}
+
+String loadWebSocketUrl() {
+  prefs.begin(PREFS_NAMESPACE, true);
+  String url = prefs.getString("ws_url", DEFAULT_WS_URL);
+  prefs.end();
+  return url;
+}
+
+void saveWebSocketUrl(const String &url) {
+  prefs.begin(PREFS_NAMESPACE, false);
+  prefs.putString("ws_url", url);
   prefs.end();
 }
 
@@ -173,6 +205,156 @@ String buildAdminEndpoint(const char *path) {
   return adminUrl + path;
 }
 
+String compactMacAddress() {
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  mac.toLowerCase();
+  return mac.length() > 0 ? mac : "unknown";
+}
+
+bool parseWebSocketUrl(const String &url, String &host, uint16_t &port,
+                       String &path) {
+  const String prefix = "ws://";
+  if (!url.startsWith(prefix)) {
+    return false;
+  }
+
+  int hostStart = prefix.length();
+  int pathStart = url.indexOf('/', hostStart);
+  String hostPort = pathStart >= 0 ? url.substring(hostStart, pathStart)
+                                  : url.substring(hostStart);
+  path = pathStart >= 0 ? url.substring(pathStart) : "/";
+  if (hostPort.length() == 0 || path.length() == 0) {
+    return false;
+  }
+
+  int colon = hostPort.lastIndexOf(':');
+  if (colon >= 0) {
+    host = hostPort.substring(0, colon);
+    int parsedPort = hostPort.substring(colon + 1).toInt();
+    if (host.length() == 0 || parsedPort <= 0 || parsedPort > 65535) {
+      return false;
+    }
+    port = (uint16_t)parsedPort;
+  } else {
+    host = hostPort;
+    port = 80;
+  }
+  return host.length() > 0;
+}
+
+bool readUntilMarker(WiFiClient &client, const String &marker, String &out,
+                     unsigned long timeoutMs) {
+  unsigned long deadline = millis() + timeoutMs;
+  out = "";
+  while (millis() < deadline) {
+    while (client.available() > 0) {
+      out += (char)client.read();
+      if (out.endsWith(marker)) {
+        return true;
+      }
+      if (out.length() > 4096) {
+        return false;
+      }
+    }
+    delay(5);
+  }
+  return false;
+}
+
+bool readExact(WiFiClient &client, uint8_t *buffer, size_t length,
+               unsigned long timeoutMs) {
+  size_t offset = 0;
+  unsigned long deadline = millis() + timeoutMs;
+  while (offset < length && millis() < deadline) {
+    int available = client.available();
+    if (available <= 0) {
+      delay(5);
+      continue;
+    }
+    int readCount = client.read(buffer + offset, length - offset);
+    if (readCount > 0) {
+      offset += (size_t)readCount;
+    }
+  }
+  return offset == length;
+}
+
+bool sendWebSocketText(WiFiClient &client, const String &payload) {
+  size_t length = payload.length();
+  uint8_t header[4];
+  header[0] = 0x81;  // FIN + text frame
+  if (length <= 125) {
+    header[1] = 0x80 | (uint8_t)length;
+    client.write(header, 2);
+  } else if (length <= 65535) {
+    header[1] = 0x80 | 126;
+    header[2] = (uint8_t)((length >> 8) & 0xff);
+    header[3] = (uint8_t)(length & 0xff);
+    client.write(header, 4);
+  } else {
+    return false;
+  }
+
+  const uint8_t mask[4] = {0x12, 0x34, 0x56, 0x78};
+  client.write(mask, sizeof(mask));
+  for (size_t i = 0; i < length; i++) {
+    uint8_t b = ((uint8_t)payload[i]) ^ mask[i % 4];
+    client.write(&b, 1);
+  }
+  return true;
+}
+
+bool receiveWebSocketText(WiFiClient &client, String &payload,
+                          uint8_t &opcode) {
+  uint8_t header[2];
+  if (!readExact(client, header, 2, WS_TIMEOUT_MS)) {
+    return false;
+  }
+
+  opcode = header[0] & 0x0f;
+  uint64_t length = header[1] & 0x7f;
+  if (length == 126) {
+    uint8_t ext[2];
+    if (!readExact(client, ext, 2, WS_TIMEOUT_MS)) {
+      return false;
+    }
+    length = ((uint16_t)ext[0] << 8) | ext[1];
+  } else if (length == 127) {
+    uint8_t ext[8];
+    if (!readExact(client, ext, 8, WS_TIMEOUT_MS)) {
+      return false;
+    }
+    length = 0;
+    for (int i = 0; i < 8; i++) {
+      length = (length << 8) | ext[i];
+    }
+  }
+
+  uint8_t mask[4] = {0, 0, 0, 0};
+  bool masked = (header[1] & 0x80) != 0;
+  if (masked && !readExact(client, mask, 4, WS_TIMEOUT_MS)) {
+    return false;
+  }
+  if (length > WS_MAX_TEXT_FRAME) {
+    return false;
+  }
+
+  payload = "";
+  payload.reserve((size_t)length);
+  for (uint64_t i = 0; i < length; i++) {
+    uint8_t b;
+    if (!readExact(client, &b, 1, WS_TIMEOUT_MS)) {
+      return false;
+    }
+    if (masked) {
+      b ^= mask[i % 4];
+    }
+    payload += (char)b;
+  }
+  return true;
+}
+
 void addJsonDeviceHeaders(HTTPClient &http) {
   http.addHeader("Content-Type", "application/json");
   String deviceToken = loadDeviceToken();
@@ -181,15 +363,227 @@ void addJsonDeviceHeaders(HTTPClient &http) {
   }
 }
 
+bool ensureMicReady() {
+  if (micReady) {
+    return true;
+  }
+  micI2S.setTimeout(1000);
+  micI2S.setPinsPdmRx(PDM_MIC_CLK_PIN, PDM_MIC_DATA_PIN);
+  micReady = micI2S.begin(I2S_MODE_PDM_RX, MIC_SAMPLE_RATE,
+                          I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO,
+                          I2S_STD_SLOT_RIGHT);
+  if (!micReady) {
+    Serial.printf("PDM mic init failed, lastError=%d\n", micI2S.lastError());
+  }
+  return micReady;
+}
+
+void testPdmMicrophone() {
+  if (!ensureMicReady()) {
+    return;
+  }
+
+  int16_t samples[MIC_READ_SAMPLES];
+  uint32_t chunks = 0;
+  uint32_t totalSamples = 0;
+  int32_t minSample = INT32_MAX;
+  int32_t maxSample = INT32_MIN;
+  int64_t sum = 0;
+  uint64_t sumSquares = 0;
+  unsigned long deadline = millis() + MIC_TEST_MS;
+
+  Serial.printf("PDM mic test: CLK=GPIO%d DATA=GPIO%d rate=%luHz duration=%lums\n",
+                PDM_MIC_CLK_PIN, PDM_MIC_DATA_PIN,
+                (unsigned long)MIC_SAMPLE_RATE, (unsigned long)MIC_TEST_MS);
+  Serial.println("Speak near the microphone now...");
+
+  while (millis() < deadline) {
+    size_t bytesRead = micI2S.readBytes((char *)samples, sizeof(samples));
+    size_t sampleCount = bytesRead / sizeof(samples[0]);
+    if (sampleCount == 0) {
+      delay(5);
+      continue;
+    }
+    chunks++;
+    totalSamples += sampleCount;
+    for (size_t i = 0; i < sampleCount; i++) {
+      int32_t value = samples[i];
+      sum += value;
+      sumSquares += (int64_t)value * value;
+      if (value < minSample) {
+        minSample = value;
+      }
+      if (value > maxSample) {
+        maxSample = value;
+      }
+    }
+  }
+
+  if (totalSamples == 0) {
+    Serial.println("PDM mic test failed: no samples read.");
+    return;
+  }
+
+  double mean = (double)sum / (double)totalSamples;
+  double rms = sqrt((double)sumSquares / (double)totalSamples);
+  int32_t peak = max(abs(minSample), abs(maxSample));
+  Serial.printf("PDM mic samples=%lu chunks=%lu min=%ld max=%ld peak=%ld mean=%.1f rms=%.1f\n",
+                (unsigned long)totalSamples, (unsigned long)chunks,
+                (long)minSample, (long)maxSample, (long)peak, mean, rms);
+}
+
+void testSpeakerTone() {
+  if (micReady) {
+    micI2S.end();
+    micReady = false;
+  }
+
+  speakerI2S.setTimeout(1000);
+  speakerI2S.setPins(AUDIO_BCLK_PIN, AUDIO_LRCLK_PIN, AUDIO_SDATA_PIN);
+  if (!speakerI2S.begin(I2S_MODE_STD, SPEAKER_SAMPLE_RATE,
+                        I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO,
+                        I2S_STD_SLOT_BOTH)) {
+    Serial.printf("Speaker I2S init failed, lastError=%d\n",
+                  speakerI2S.lastError());
+    return;
+  }
+
+  Serial.printf("Speaker test: BCLK=GPIO%d LRCLK=GPIO%d SDATA=GPIO%d rate=%luHz tone=%uHz duration=%lums\n",
+                AUDIO_BCLK_PIN, AUDIO_LRCLK_PIN, AUDIO_SDATA_PIN,
+                (unsigned long)SPEAKER_SAMPLE_RATE, SPEAKER_TONE_HZ,
+                (unsigned long)SPEAKER_TEST_MS);
+
+  const size_t framesPerChunk = 128;
+  int16_t samples[framesPerChunk * 2];
+  uint32_t totalFrames = SPEAKER_SAMPLE_RATE * SPEAKER_TEST_MS / 1000;
+  uint32_t writtenFrames = 0;
+  while (writtenFrames < totalFrames) {
+    size_t frames = min((uint32_t)framesPerChunk, totalFrames - writtenFrames);
+    for (size_t i = 0; i < frames; i++) {
+      float phase = 2.0f * PI * SPEAKER_TONE_HZ *
+                    (float)(writtenFrames + i) / (float)SPEAKER_SAMPLE_RATE;
+      int16_t sample = (int16_t)(sinf(phase) * SPEAKER_TONE_AMPLITUDE);
+      samples[i * 2] = sample;
+      samples[i * 2 + 1] = sample;
+    }
+    speakerI2S.write((uint8_t *)samples, frames * 2 * sizeof(int16_t));
+    writtenFrames += frames;
+  }
+
+  memset(samples, 0, sizeof(samples));
+  for (int i = 0; i < 4; i++) {
+    speakerI2S.write((uint8_t *)samples, sizeof(samples));
+  }
+  speakerI2S.end();
+  Serial.println("Speaker test done.");
+}
+
 void printCommandHelp() {
   Serial.println("Commands:");
   Serial.println("  help");
   Serial.println("  admin <http://host:8766>");
-  Serial.println("  token <device-token>   (empty to clear)");
+  Serial.println("  ws <ws://host:8766/xiaozhi/v1>");
+  Serial.println("  token <auth-token>   (empty to clear)");
   Serial.println("  ask <prompt>");
   Serial.println("  askstream <prompt>");
+  Serial.println("  wshello");
+  Serial.println("  mictest");
+  Serial.println("  speakertest");
   Serial.printf("Current admin URL: %s\n", loadAdminUrl().c_str());
-  Serial.printf("Device token: %s\n", loadDeviceToken().length() > 0 ? "set" : "unset");
+  Serial.printf("Current WebSocket URL: %s\n", loadWebSocketUrl().c_str());
+  Serial.printf("Auth token: %s\n", loadDeviceToken().length() > 0 ? "set" : "unset");
+}
+
+void testXiaozhiWebSocketHello() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi is not connected; cannot open WebSocket.");
+    return;
+  }
+
+  String url = loadWebSocketUrl();
+  String host, path;
+  uint16_t port = 80;
+  if (!parseWebSocketUrl(url, host, port, path)) {
+    Serial.println("WebSocket URL must look like ws://host:port/path");
+    return;
+  }
+
+  String mac = compactMacAddress();
+  String deviceId = "esp32-" + mac;
+  String clientId = deviceId + "-client";
+  String token = loadDeviceToken();
+
+  WiFiClient client;
+  client.setTimeout(WS_TIMEOUT_MS / 1000);
+  Serial.printf("WS connect %s\n", url.c_str());
+  if (!client.connect(host.c_str(), port)) {
+    Serial.println("WebSocket TCP connect failed.");
+    return;
+  }
+
+  String request;
+  request.reserve(512 + token.length());
+  request += "GET " + path + " HTTP/1.1\r\n";
+  request += "Host: " + host + ":" + String(port) + "\r\n";
+  request += "Upgrade: websocket\r\n";
+  request += "Connection: Upgrade\r\n";
+  request += "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n";
+  request += "Sec-WebSocket-Version: 13\r\n";
+  request += "Protocol-Version: 1\r\n";
+  request += "Device-Id: " + deviceId + "\r\n";
+  request += "Client-Id: " + clientId + "\r\n";
+  if (token.length() > 0) {
+    request += "Authorization: Bearer " + token + "\r\n";
+  }
+  request += "\r\n";
+  client.print(request);
+
+  String responseHeaders;
+  if (!readUntilMarker(client, "\r\n\r\n", responseHeaders, WS_TIMEOUT_MS)) {
+    Serial.println("WebSocket handshake timed out.");
+    client.stop();
+    return;
+  }
+  if (!responseHeaders.startsWith("HTTP/1.1 101") &&
+      !responseHeaders.startsWith("HTTP/1.0 101")) {
+    Serial.println("WebSocket handshake failed:");
+    Serial.println(responseHeaders);
+    client.stop();
+    return;
+  }
+  Serial.println("WebSocket upgraded.");
+
+  String hello =
+      "{\"type\":\"hello\",\"version\":1,\"features\":{\"mcp\":true},"
+      "\"transport\":\"websocket\",\"audio_params\":{\"format\":\"opus\","
+      "\"sample_rate\":16000,\"channels\":1,\"frame_duration\":60}}";
+  if (!sendWebSocketText(client, hello)) {
+    Serial.println("Failed to send WebSocket hello.");
+    client.stop();
+    return;
+  }
+
+  String frame;
+  uint8_t opcode = 0;
+  if (!receiveWebSocketText(client, frame, opcode)) {
+    Serial.println("Timed out waiting for server hello.");
+    client.stop();
+    return;
+  }
+  if (opcode == 0x8) {
+    Serial.println("WebSocket closed before hello.");
+    client.stop();
+    return;
+  }
+  if (opcode != 0x1) {
+    Serial.printf("Unexpected WebSocket opcode: %u\n", opcode);
+    client.stop();
+    return;
+  }
+
+  Serial.println("WebSocket server hello:");
+  Serial.println(frame);
+  client.stop();
 }
 
 void askAdminBackend(const String &prompt) {
@@ -355,11 +749,20 @@ void handleSerialLine(String line) {
     }
     saveAdminUrl(url);
     Serial.printf("Admin URL saved: %s\n", url.c_str());
+  } else if (line.startsWith("ws ")) {
+    String url = line.substring(3);
+    url.trim();
+    if (!url.startsWith("ws://")) {
+      Serial.println("WebSocket URL must start with ws://");
+      return;
+    }
+    saveWebSocketUrl(url);
+    Serial.printf("WebSocket URL saved: %s\n", url.c_str());
   } else if (line.startsWith("token ")) {
     String token = line.substring(6);
     token.trim();
     saveDeviceToken(token);
-    Serial.println(token.length() > 0 ? "Device token saved." : "Device token cleared.");
+    Serial.println(token.length() > 0 ? "Auth token saved." : "Auth token cleared.");
   } else if (line.startsWith("ask ")) {
     String prompt = line.substring(4);
     prompt.trim();
@@ -376,6 +779,12 @@ void handleSerialLine(String line) {
       return;
     }
     askStreamAdminBackend(prompt);
+  } else if (line == "wshello") {
+    testXiaozhiWebSocketHello();
+  } else if (line == "mictest") {
+    testPdmMicrophone();
+  } else if (line == "speakertest") {
+    testSpeakerTone();
   } else {
     Serial.println("Unknown command. Type help.");
   }
